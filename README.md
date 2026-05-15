@@ -161,6 +161,65 @@ CLI または Web UI 上で，メールごとに以下を尋ねます．
 - OpenAI API または任意の LLM API
 - pytest
 
+## 開発環境のセットアップ
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+設定は `.env.example` をもとに `.env` を作成します．
+
+Gmail を実際に読み込む場合は，Google Cloud で OAuth クライアントを作成し，ダウンロードした JSON を `credentials.json` としてリポジトリ直下に置きます．`credentials.json` と認証後に生成される `token.json` は Git 管理対象外です．
+
+OAuth クライアントは Desktop app として作成するのが簡単です．Web application として作成した場合は，Google Cloud Console の「承認済みのリダイレクト URI」に以下を追加してください．
+
+```text
+http://localhost:8080/
+```
+
+```powershell
+.\.venv\Scripts\matomail.exe fetch
+```
+
+初回実行時はブラウザで Google の認証フローが開きます．現在の実装では Gmail の読み取り専用スコープを使い，添付ファイルはメタデータのみ検出してダウンロードしません．
+
+`Gmail API has not been used ... or it is disabled` と表示された場合は，Google Cloud Console で Gmail API を有効化してから再実行してください．有効化直後は反映まで数分かかることがあります．
+
+取得したメールのメタデータ，本文全文，添付メタデータ，処理状態は `MATOMAIL_DB_PATH` に指定したメール用 SQLite DB に保存されます．初期値は `./data/matomail.sqlite3` です．同じ Gmail message ID のメールは重複保存されず，`processed` または `skipped` にしたメールは次回以降の処理対象から除外されます．`pending` のメールは後で再確認できる状態として残ります．
+
+本文保存は `MATOMAIL_STORE_EMAIL_BODY=false` で無効化できます．DB が `MATOMAIL_DB_MAX_SIZE_MB` を超えた場合は，起動時に `MATOMAIL_DB_BACKUP_DIR` 配下の日時付きフォルダへ既存 DB を退避し，新しい `matomail.sqlite3` から再開します．
+
+恒久的な判定条件は `MATOMAIL_RULES_DB_PATH` に指定したルール用 SQLite DB に保存します．初期値は `./data/matomail_rules.sqlite3` です．Gmail のフィルタ条件を参考に，送信者，宛先，件名，含む語句，含まない語句，添付有無，添付ファイル名，サイズ，受信日時などを持てる設計です．アクションは `ignore`，`always_process`，`skip_analysis` を想定します．Gmail ラベルやカテゴリなど，取得側のメタデータがまだない項目は DB に保存できる形だけ先に用意しています．
+
+単純なフィルタでは表現しにくい判断基準は `llm_instruction_rules` テーブルに保存します．たとえば「査読対応の依頼は Abstract を読んで専門との合致率を表示する」「本文中に特定語がない場合は優先度を下げる」「学位プログラムの Web 更新は優先し，学類の Web 更新は低優先度にする」といった追加指示を，常時または条件付きで LLM プロンプトへ差し込めます．
+
+fetch 時にはルール DB を参照し，判定結果をメール DB の `filter_decisions` テーブルに保存します．`preclassify` ルールに一致したメールは，LLM を使わずに `email_analysis` へ自動分類結果を保存できます．
+
+LLM 解析には OpenAI API を使います．API キーは `.env` の `OPENAI_API_KEY` に設定し，利用モデルは `MATOMAIL_LLM_MODEL` で指定します．`.env` は Git 管理対象外です．
+
+ルールは CLI から管理できます．
+
+```powershell
+.\.venv\Scripts\matomail.exe rules list
+.\.venv\Scripts\matomail.exe rules add-sender-skip newsletter@example.com --name "newsletter"
+.\.venv\Scripts\matomail.exe rules add-subject-skip "Dr. Horie - Read the most recent articles online"
+.\.venv\Scripts\matomail.exe rules add-subject-preclassify "緊急" --priority high --category important --summary "緊急メール"
+.\.venv\Scripts\matomail.exe rules disable 1
+.\.venv\Scripts\matomail.exe rules enable 1
+.\.venv\Scripts\matomail.exe rules delete 1
+```
+
+LLM 追加指示も CLI から管理できます．
+
+```powershell
+.\.venv\Scripts\matomail.exe instructions list
+.\.venv\Scripts\matomail.exe instructions add "査読対応の依頼は Abstract を読み，専門との合致率を表示する。" --subject-query "査読"
+.\.venv\Scripts\matomail.exe instructions disable 1
+.\.venv\Scripts\matomail.exe instructions enable 1
+.\.venv\Scripts\matomail.exe instructions delete 1
+```
+
 ## ディレクトリ構成案
 
 ```text

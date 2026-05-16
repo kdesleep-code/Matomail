@@ -2,10 +2,918 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8">
-    <title>Matomail Report</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% if page == "message" %}{{ email.subject }}{% else %}{{ report_date }} に読み込んだメール一覧{% endif %} - Matomail</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f9;
+        --surface: #ffffff;
+        --text: #17202a;
+        --muted: #64707d;
+        --line: #d9dee5;
+        --accent: #176b87;
+        --accent-soft: #e6f3f7;
+        --high: #b42318;
+        --medium: #946200;
+        --low: #287a3e;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif;
+        line-height: 1.55;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .page {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 32px 24px 48px;
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 24px;
+        align-items: start;
+        margin-bottom: 24px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .subtle {
+        color: var(--muted);
+        font-size: 14px;
+        margin-top: 6px;
+      }
+
+      .report-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin: -10px 284px 14px 0;
+      }
+
+      .home-link,
+      .action-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--accent);
+        font-weight: 700;
+        padding: 0 12px;
+      }
+
+      .home-link {
+        min-height: 34px;
+        font-size: 14px;
+      }
+
+      .action-link {
+        min-height: 36px;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) auto;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+
+      .search-status {
+        min-height: 22px;
+        margin-bottom: 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      input,
+      select {
+        min-height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--text);
+        font: inherit;
+        padding: 8px 12px;
+      }
+
+      .mail-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .mail-card {
+        display: grid;
+        gap: 8px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .mail-card:hover {
+        border-color: var(--accent);
+      }
+
+      .mail-header {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .subject {
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .snippet {
+        color: #303943;
+        font-size: 14px;
+      }
+
+      .attachment-summary {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 72px;
+        min-height: 28px;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        border: 1px solid currentColor;
+      }
+
+      .priority-top {
+        color: #7a1a1a;
+        background: #ffe4d6;
+      }
+
+      .priority-high {
+        color: var(--high);
+        background: #fff0ee;
+      }
+
+      .priority-medium {
+        color: var(--medium);
+        background: #fff6df;
+      }
+
+      .priority-low {
+        color: var(--low);
+        background: #eef8f1;
+      }
+
+      .calendar {
+        width: 260px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 12px;
+      }
+
+      .calendar-title {
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+
+      .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 4px;
+        text-align: center;
+        font-size: 12px;
+      }
+
+      .calendar-grid span,
+      .calendar-grid a {
+        display: grid;
+        min-height: 28px;
+        place-items: center;
+        border-radius: 4px;
+      }
+
+      .calendar-grid a {
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .calendar-grid a.current {
+        background: var(--accent);
+        color: white;
+      }
+
+      .edge-nav {
+        position: fixed;
+        top: 50%;
+        z-index: 5;
+        display: grid;
+        width: 46px;
+        height: 70px;
+        place-items: center;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--accent);
+        font-size: 26px;
+      }
+
+      .edge-nav.left {
+        left: 0;
+        border-radius: 0 8px 8px 0;
+      }
+
+      .edge-nav.right {
+        right: 0;
+        border-radius: 8px 0 0 8px;
+      }
+
+      .edge-nav.disabled {
+        color: #a6aeb7;
+        pointer-events: none;
+      }
+
+      .message {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 24px;
+      }
+
+      .thread-message {
+        margin-top: 22px;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--sender-bg, #f8fafc);
+        padding: 18px;
+      }
+
+      .thread-divider {
+        margin: 24px 0 2px;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 700;
+        text-align: center;
+      }
+
+      .thread-message-header {
+        display: grid;
+        gap: 8px;
+        position: relative;
+        padding-right: 230px;
+      }
+
+      .thread-message-title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .thread-message-header h2 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.4;
+        letter-spacing: 0;
+      }
+
+      .message-top-actions {
+        position: absolute;
+        top: 0;
+        right: 0;
+        display: flex;
+        gap: 8px;
+      }
+
+      .reply-draft-toggle,
+      .reply-button {
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--accent);
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        text-decoration: none;
+      }
+
+      .reply-draft-toggle:hover,
+      .reply-button:hover {
+        background: #eff6ff;
+      }
+
+      .reply-draft-panel {
+        display: grid;
+        gap: 10px;
+        margin-top: 16px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.74);
+      }
+
+      .reply-draft-panel[hidden],
+      .reply-draft-output[hidden] {
+        display: none;
+      }
+
+      .reply-draft-panel label {
+        display: grid;
+        gap: 6px;
+        font-weight: 700;
+      }
+
+      .reply-draft-panel textarea {
+        width: 100%;
+        min-height: 120px;
+        resize: vertical;
+        box-sizing: border-box;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        font: inherit;
+        background: var(--surface);
+      }
+
+      .reply-draft-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .reply-draft-submit {
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        color: white;
+        padding: 9px 14px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .reply-draft-status {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .reply-draft-output {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+
+      .attachments {
+        margin-top: 18px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f8fafc;
+      }
+
+      .attachments h3 {
+        margin: 0 0 10px;
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      .attachment-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .attachment-link {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 13px;
+      }
+
+      .attachment-link:hover {
+        border-color: var(--accent);
+      }
+
+      .message-body {
+        margin-top: 24px;
+        padding-top: 20px;
+        border-top: 1px solid var(--line);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .message-html {
+        width: 100%;
+        min-height: 720px;
+        margin-top: 24px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: white;
+      }
+
+      .digest {
+        display: grid;
+        gap: 18px;
+        margin-top: 22px;
+        border-top: 1px solid var(--line);
+        padding-top: 20px;
+      }
+
+      .digest-section {
+        display: grid;
+        gap: 8px;
+      }
+
+      .digest-section h2 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0;
+      }
+
+      .digest-text {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .original-mail {
+        margin-top: 22px;
+        border-top: 1px solid var(--line);
+        padding-top: 18px;
+      }
+
+      .original-mail summary {
+        cursor: pointer;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .message-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+
+      .empty {
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        padding: 28px;
+        background: var(--surface);
+        color: var(--muted);
+        text-align: center;
+      }
+
+      @media (max-width: 820px) {
+        .page {
+          padding: 24px 14px 36px;
+        }
+
+        .topbar,
+        .toolbar {
+          grid-template-columns: 1fr;
+        }
+
+        .report-actions {
+          justify-content: stretch;
+          margin: 0 0 14px;
+        }
+
+        .home-link {
+          width: 100%;
+        }
+
+        .calendar {
+          width: 100%;
+        }
+
+        .edge-nav {
+          width: 34px;
+          height: 58px;
+        }
+
+        .thread-message-header {
+          padding-right: 0;
+        }
+
+        .reply-draft-toggle {
+          position: static;
+          width: 100%;
+        }
+
+        .message-top-actions {
+          position: static;
+          width: 100%;
+          flex-direction: column;
+        }
+
+        .reply-button {
+          width: 100%;
+        }
+      }
+    </style>
   </head>
   <body>
-    <h1>Matomail Report</h1>
+    {% if previous_href %}
+      <a class="edge-nav left" href="{{ previous_href }}" aria-label="前の日">◀</a>
+    {% else %}
+      <span class="edge-nav left disabled" aria-hidden="true">◀</span>
+    {% endif %}
+    {% if next_href %}
+      <a class="edge-nav right" href="{{ next_href }}" aria-label="次の日">▶</a>
+    {% else %}
+      <span class="edge-nav right disabled" aria-hidden="true">▶</span>
+    {% endif %}
+
+    <main class="page">
+      {% if page == "list" %}
+        <section class="topbar">
+          <div>
+            <h1>{{ report_date }} に読み込んだメール一覧</h1>
+            <div class="subtle">{{ thread_count }} スレッド / {{ email_count }} 件 / 生成 {{ generated_at }}</div>
+          </div>
+          <aside class="calendar" aria-label="日付選択">
+            <div class="calendar-title">{{ calendar_month }}</div>
+            <div class="calendar-grid">
+              <span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span><span>日</span>
+              {% for week in calendar_weeks %}
+                {% for day in week.days %}
+                  {% if day %}
+                    {% if day.has_emails %}
+                      <a href="{{ day.href }}" class="{% if day.is_current %}current{% endif %}">{{ day.day }}</a>
+                    {% else %}
+                      <span>{{ day.day }}</span>
+                    {% endif %}
+                  {% else %}
+                    <span></span>
+                  {% endif %}
+                {% endfor %}
+              {% endfor %}
+            </div>
+          </aside>
+        </section>
+
+        <section class="report-actions" aria-label="レポート操作">
+          <a class="home-link" href="/">本日のメールを読み込む</a>
+          <a class="home-link" href="/compose">新規メール作成</a>
+          <a class="home-link" href="/singletons">シリーズにない送信メール</a>
+          <a class="home-link" href="/rules">優先度ルール</a>
+        </section>
+
+        <section class="toolbar" aria-label="メール操作">
+          <input id="mailSearch" type="search" placeholder="検索" autocomplete="off">
+          <select id="mailSort" aria-label="並び替え">
+            <option value="priority">重要度順</option>
+            <option value="received">受信時刻順</option>
+          </select>
+        </section>
+        <div id="searchStatus" class="search-status"></div>
+
+        <section id="mailList" class="mail-list">
+          {% for email in emails %}
+            <article
+              class="mail-card"
+              data-href="{{ email.message_href }}"
+              data-priority="{{ priority_rank[email.analysis.priority] | default(2) }}"
+              data-received="{{ email.received_at.timestamp() if email.received_at else 0 }}"
+              data-search="{{ email.search_text|lower }}"
+            >
+              <div class="mail-header">
+                <a class="subject" href="{{ email.message_href }}">{{ email.subject or "(件名なし)" }}</a>
+                <span class="badge priority-{{ email.analysis.priority }}">{{ email.analysis.priority }}</span>
+              </div>
+              <div class="meta">
+                <span>From: {{ email.sender }}</span>
+                <span>To: {{ email.recipients|join(", ") }}</span>
+                <span>受信: {{ email.received_at_display }}</span>
+                <span>読込: {{ email.loaded_at_display }}</span>
+                {% if email.message_count > 1 %}<span>{{ email.message_count }} 件</span>{% endif %}
+                <a href="{{ email.gmail_href }}" target="_blank" rel="noopener">Gmailで開く</a>
+              </div>
+              <div class="snippet">{{ email.snippet[:180] }}{% if email.snippet|length > 180 %}...{% endif %}</div>
+              {% if email.attachment_summary %}
+                <div class="attachment-summary">添付ファイル: {{ email.attachment_summary }}</div>
+              {% endif %}
+            </article>
+          {% endfor %}
+        </section>
+        <div id="emptyState" class="empty" hidden>該当するメールがありません。</div>
+      {% else %}
+        <div class="message-actions">
+          <a class="action-link" href="{{ back_href }}">メール一覧に戻る</a>
+          <a class="action-link" href="/rules/new?message_id={{ email.gmail_message_id }}">優先度ルールの追加</a>
+        </div>
+        <article class="message">
+          <header>
+            <h1>{{ thread.subject or "(件名なし)" }}</h1>
+            <div class="meta">
+              <span>{{ thread.message_count }} 件</span>
+              <span>From: {{ thread.sender }}</span>
+              <span>To: {{ thread.recipients|join(", ") }}</span>
+              {% if thread.cc %}<span>Cc: {{ thread.cc|join(", ") }}</span>{% endif %}
+              <span>最新受信: {{ thread.received_at_display }}</span>
+            </div>
+          </header>
+          {% set today_block = namespace(started=false, active=false, ended=false) %}
+          {% for email in thread.messages %}
+            {% if email.report_date == report_date and not today_block.started %}
+              {% if not loop.first %}
+                <div class="thread-divider">ーー本日のメールはここからーー</div>
+              {% endif %}
+              {% set today_block.started = true %}
+              {% set today_block.active = true %}
+            {% elif email.report_date != report_date and today_block.active and not today_block.ended %}
+              <div class="thread-divider">ーー本日のメールはここまでーー</div>
+              {% set today_block.active = false %}
+              {% set today_block.ended = true %}
+            {% endif %}
+            <section class="thread-message" style="--sender-bg: {{ email.sender_color }};">
+              <header class="thread-message-header">
+                {% if not email.is_sent %}
+                  <div class="message-top-actions">
+                  <button
+                    type="button"
+                    class="reply-draft-toggle"
+                    data-message-id="{{ email.gmail_message_id }}"
+                  >返信案を自動生成</button>
+                    <a
+                      class="reply-button"
+                      href="/replies/new?message_id={{ email.gmail_message_id }}"
+                    >返信</a>
+                  </div>
+                {% endif %}
+                <h2>{{ email.subject or "(件名なし)" }}</h2>
+                <div class="meta">
+                  <span>From: {{ email.sender }}</span>
+                  <span>To: {{ email.recipients|join(", ") }}</span>
+                  {% if email.cc %}<span>Cc: {{ email.cc|join(", ") }}</span>{% endif %}
+                  <span>受信: {{ email.received_at_display }}</span>
+                  <span>読込: {{ email.loaded_at_display }}</span>
+                  <span class="badge priority-{{ email.analysis.priority }}">{{ email.analysis.priority }}</span>
+                </div>
+              </header>
+              {% if not email.is_sent %}
+                <form
+                  class="reply-draft-panel"
+                  data-message-id="{{ email.gmail_message_id }}"
+                  hidden
+                >
+                  <label>
+                    返信の方針
+                    <textarea
+                      name="policy"
+                      placeholder="例: 丁寧にお礼を伝え、来週月曜までに確認して返信すると伝える"
+                    ></textarea>
+                  </label>
+                  <div class="reply-draft-controls">
+                    <button type="submit" class="reply-draft-submit">OK</button>
+                    <span class="reply-draft-status" aria-live="polite"></span>
+                  </div>
+                  <div class="reply-draft-output" hidden></div>
+                </form>
+              {% endif %}
+              {% if email.attachments %}
+                <section class="attachments" aria-label="添付ファイル">
+                  <h3>添付ファイル</h3>
+                  <div class="attachment-list">
+                    {% for attachment in email.attachments %}
+                      <a
+                        class="attachment-link"
+                        href="/attachments/{{ email.gmail_message_id }}/{{ loop.index0 }}"
+                        download="{{ attachment.filename or 'attachment' }}"
+                      >
+                        <span>{{ attachment.filename or "添付ファイル" }}</span>
+                        {% if attachment.size %}<span>{{ attachment.size }} bytes</span>{% endif %}
+                      </a>
+                    {% endfor %}
+                  </div>
+                </section>
+              {% endif %}
+              {% if email.digest %}
+                <section class="digest" aria-label="要約">
+                  <div class="digest-section">
+                    <h2>要約</h2>
+                    <div class="digest-text">{{ email.digest.summary_ja }}</div>
+                  </div>
+                </section>
+                {% if email.digest.translation_ja %}
+                  <details class="original-mail">
+                    <summary>和訳全文を開く</summary>
+                    <div class="message-body">{{ email.digest.translation_ja }}</div>
+                  </details>
+                {% endif %}
+                <details class="original-mail">
+                  <summary>{% if email.digest.translation_ja %}原語全文を開く{% else %}メール本文を開く{% endif %}</summary>
+                  {% if email.body_html %}
+                    <iframe
+                      class="message-html"
+                      sandbox=""
+                      srcdoc="{{ email.body_html | e }}"
+                      title="メールHTML本文"
+                    ></iframe>
+                  {% else %}
+                    <div class="message-body">{{ email.body or email.snippet or "本文が保存されていません。" }}</div>
+                  {% endif %}
+                </details>
+              {% elif email.is_sent %}
+                <section class="digest" aria-label="要約">
+                  <div class="digest-section">
+                    <h2>要約</h2>
+                    <div class="digest-text">{{ email.analysis.summary_ja or "送信メールです。" }}</div>
+                  </div>
+                </section>
+                <details class="original-mail">
+                  <summary>メール本文を開く</summary>
+                  {% if email.body_html %}
+                    <iframe
+                      class="message-html"
+                      sandbox=""
+                      srcdoc="{{ email.body_html | e }}"
+                      title="メールHTML本文"
+                    ></iframe>
+                  {% else %}
+                    <div class="message-body">{{ email.body or email.snippet or "本文が保存されていません。" }}</div>
+                  {% endif %}
+                </details>
+              {% else %}
+                {% if email.body_html %}
+                  <iframe
+                    class="message-html"
+                    sandbox=""
+                    srcdoc="{{ email.body_html | e }}"
+                    title="メールHTML本文"
+                  ></iframe>
+                {% else %}
+                  <div class="message-body">{{ email.body or email.snippet or "本文が保存されていません。" }}</div>
+                {% endif %}
+              {% endif %}
+            </section>
+          {% endfor %}
+          {% if today_block.active %}
+            <div class="thread-divider">ーー本日のメールはここまでーー</div>
+          {% endif %}
+        </article>
+      {% endif %}
+    </main>
+
+    {% if page == "list" %}
+      <script>
+        const list = document.querySelector("#mailList");
+        const cards = Array.from(document.querySelectorAll(".mail-card"));
+        const search = document.querySelector("#mailSearch");
+        const sort = document.querySelector("#mailSort");
+        const emptyState = document.querySelector("#emptyState");
+        const searchStatus = document.querySelector("#searchStatus");
+
+        function render() {
+          const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+          const mode = sort.value;
+          const visible = cards.filter((card) => {
+            const haystack = (card.dataset.search || "").toLowerCase();
+            return terms.every((term) => haystack.includes(term));
+          });
+
+          visible.sort((a, b) => {
+            if (mode === "priority") {
+              const priorityDelta = Number(b.dataset.priority) - Number(a.dataset.priority);
+              if (priorityDelta !== 0) return priorityDelta;
+            }
+            return Number(b.dataset.received) - Number(a.dataset.received);
+          });
+
+          cards.forEach((card) => card.style.display = "none");
+          visible.forEach((card) => {
+            card.style.display = "";
+            list.appendChild(card);
+          });
+          emptyState.hidden = visible.length > 0;
+          searchStatus.textContent = terms.length
+            ? `${visible.length} / ${cards.length} 件が一致`
+            : `${cards.length} 件を表示`;
+        }
+
+        search.addEventListener("input", render);
+        sort.addEventListener("change", render);
+        cards.forEach((card) => {
+          card.addEventListener("click", (event) => {
+            if (event.target.closest("a, button")) return;
+            window.location.href = card.dataset.href;
+          });
+        });
+        render();
+      </script>
+    {% endif %}
+    {% if page == "message" %}
+      <script>
+        const replyButtons = Array.from(document.querySelectorAll(".reply-draft-toggle"));
+
+        replyButtons.forEach((button) => {
+          const messageId = button.dataset.messageId;
+          const panel = document.querySelector(`.reply-draft-panel[data-message-id="${messageId}"]`);
+          if (!panel) return;
+
+          button.addEventListener("click", () => {
+            panel.hidden = !panel.hidden;
+            if (!panel.hidden) {
+              panel.querySelector("textarea").focus();
+            }
+          });
+
+          panel.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const submit = panel.querySelector(".reply-draft-submit");
+            const status = panel.querySelector(".reply-draft-status");
+            const output = panel.querySelector(".reply-draft-output");
+            submit.disabled = true;
+            status.textContent = "返信案を生成中...";
+            output.hidden = true;
+            output.textContent = "";
+
+            try {
+              const response = await fetch("/reply-drafts", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  message_id: messageId,
+                  policy: panel.querySelector("textarea").value,
+                }),
+              });
+              const payload = await response.json();
+              if (!response.ok) {
+                throw new Error(payload.error || "返信案の生成に失敗しました");
+              }
+              output.textContent = payload.draft;
+              output.hidden = false;
+              status.textContent = "返信作成画面へ移動します...";
+              const form = document.createElement("form");
+              form.method = "POST";
+              form.action = "/replies/new";
+              const fields = {
+                message_id: messageId,
+                draft: payload.draft,
+                return_url: window.location.pathname,
+              };
+              Object.entries(fields).forEach(([name, value]) => {
+                const input = document.createElement("input");
+                input.type = "hidden";
+                input.name = name;
+                input.value = value;
+                form.appendChild(input);
+              });
+              document.body.appendChild(form);
+              form.submit();
+            } catch (error) {
+              status.textContent = error.message || "返信案の生成に失敗しました";
+            } finally {
+              submit.disabled = false;
+            }
+          });
+        });
+      </script>
+    {% endif %}
   </body>
 </html>
-

@@ -16,3 +16,4 @@ def test_default_settings_match_initial_requirements() -> None:
     assert settings.download_attachments is False
     assert settings.send_email_without_confirmation is False
     assert settings.create_calendar_without_confirmation is False
+    assert settings.gmail_sender_name == ""

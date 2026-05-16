@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ーーーの追加 - Matomail</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --surface: #ffffff;
+        --text: #17202a;
+        --muted: #64707d;
+        --line: #d9dee5;
+        --accent: #176b87;
+        --accent-dark: #0f5268;
+        --danger: #b42318;
+        --success: #287a3e;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif;
+        line-height: 1.55;
+      }
+
+      main {
+        width: min(900px, calc(100vw - 32px));
+        margin: 32px auto;
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 22px;
+      }
+
+      h1,
+      h2 {
+        margin: 0;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        font-size: 26px;
+      }
+
+      h2 {
+        font-size: 18px;
+      }
+
+      .meta,
+      .hint {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .condition {
+        display: grid;
+        grid-template-columns: auto 120px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        padding: 14px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .condition:first-of-type {
+        border-top: 0;
+      }
+
+      label {
+        font-weight: 700;
+      }
+
+      input[type="text"],
+      textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--text);
+        font: inherit;
+        padding: 9px 10px;
+      }
+
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+
+      .mode {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+      }
+
+      .mode label {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0 12px;
+      }
+
+      .instruction-field {
+        margin-top: 12px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      button,
+      a {
+        min-height: 42px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        padding: 0 14px;
+        font: inherit;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      button {
+        border: 0;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--accent-dark);
+      }
+
+      a {
+        border: 1px solid var(--line);
+        background: white;
+        color: var(--accent);
+      }
+
+      .error {
+        color: var(--danger);
+        font-weight: 700;
+      }
+
+      .success {
+        color: var(--success);
+        font-weight: 700;
+      }
+
+      @media (max-width: 720px) {
+        .condition {
+          grid-template-columns: auto 1fr;
+        }
+
+        .condition input[type="text"],
+        .condition textarea,
+        .condition .hint {
+          grid-column: 1 / -1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>優先度ルールの追加</h1>
+        {% if error %}
+          <p class="error">{{ error }}</p>
+        {% endif %}
+        {% if saved %}
+          <p class="success">優先度ルールを追加しました。id={{ rule.id }} / {{ affected_count }} 件に適用しました。</p>
+        {% endif %}
+        {% if message %}
+          <div class="meta">
+            <span>From: {{ message.sender or "(空)" }}</span>
+            <span>To: {{ message.recipients|join(", ") }}</span>
+            <span>Subject: {{ message.subject }}</span>
+          </div>
+        {% endif %}
+      </section>
+
+      {% if message %}
+        <form class="panel" method="post" action="/rules/new">
+          <input type="hidden" name="message_id" value="{{ message.gmail_message_id }}">
+          <h2>条件</h2>
+          <div class="hint">複数の条件を選んだ場合は、すべてに一致したメールだけが対象になります。</div>
+          <div class="condition">
+            <input type="checkbox" id="use_from" name="use_from" checked>
+            <label for="use_from">送信アドレス</label>
+            <div>
+              <input type="text" name="from_query" value="{{ sender_rule_value }}">
+              {% if message.sender_candidates %}
+                <div class="hint">候補: {{ message.sender_candidates|join(", ") }}</div>
+              {% endif %}
+            </div>
+          </div>
+          <div class="condition">
+            <input type="checkbox" id="use_subject" name="use_subject">
+            <label for="use_subject">件名</label>
+            <input type="text" name="subject_query" value="{{ message.subject }}">
+          </div>
+          <div class="condition">
+            <input type="checkbox" id="use_body" name="use_body">
+            <label for="use_body">本文</label>
+            <textarea name="body_query">{{ body_excerpt }}</textarea>
+          </div>
+
+          <h2>動作</h2>
+          <div class="mode">
+            <label><input type="radio" name="rule_mode" value="skip" checked> Skip</label>
+            <label><input type="radio" name="rule_mode" value="high"> High Priority</label>
+            <label><input type="radio" name="rule_mode" value="middle"> Middle</label>
+            <label><input type="radio" name="rule_mode" value="low"> Low</label>
+            <label><input type="radio" name="rule_mode" value="top"> Top</label>
+            <label><input type="radio" name="rule_mode" value="instruction"> LLMへの追加指示</label>
+          </div>
+          <div class="instruction-field">
+            <textarea name="instruction" placeholder="LLMへの追加指示"></textarea>
+            <div class="hint">この項目を選ぶと、固定Priorityではなく、条件に一致したメールを分析するときの追加指示として保存します。</div>
+          </div>
+
+          <div class="actions">
+            <button type="submit">確定</button>
+            <a href="/reports/index.html">メール一覧に戻る</a>
+            <a href="/">読み込みページに戻る</a>
+          </div>
+        </form>
+      {% else %}
+        <section class="panel">
+          <div class="actions">
+            <a href="/reports/index.html">メール一覧に戻る</a>
+            <a href="/">読み込みページに戻る</a>
+          </div>
+        </section>
+      {% endif %}
+    </main>
+  </body>
+</html>

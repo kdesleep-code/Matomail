@@ -24,7 +24,7 @@ REQUIRED_ANALYSIS_FIELDS = {
     "reply_draft_ja",
     "confidence",
 }
-VALID_PRIORITIES = {"high", "medium", "low"}
+VALID_PRIORITIES = {"top", "high", "medium", "low"}
 
 
 class EmailAnalyzer:
@@ -100,7 +100,7 @@ def parse_analysis_json(raw_text: str) -> dict[str, Any]:
         raise ValueError(f"LLM response missing fields: {sorted(missing_fields)}")
 
     if parsed["priority"] not in VALID_PRIORITIES:
-        raise ValueError("priority must be high, medium, or low")
+        raise ValueError("priority must be top, high, medium, or low")
 
     if not isinstance(parsed["deadline_candidates"], list):
         raise ValueError("deadline_candidates must be a list")

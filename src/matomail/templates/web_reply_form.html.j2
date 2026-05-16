@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>返信 - Matomail</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --surface: #ffffff;
+        --text: #17202a;
+        --muted: #64707d;
+        --line: #d9dee5;
+        --accent: #176b87;
+        --accent-dark: #0f5268;
+        --danger: #b42318;
+        --success: #287a3e;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif;
+        line-height: 1.55;
+      }
+
+      main {
+        width: min(900px, calc(100vw - 32px));
+        margin: 32px auto;
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 22px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 26px;
+        letter-spacing: 0;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      form {
+        display: grid;
+        gap: 14px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-weight: 700;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--text);
+        font: inherit;
+        padding: 9px 10px;
+      }
+
+      textarea {
+        min-height: 260px;
+        resize: vertical;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      button,
+      a {
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        padding: 0 14px;
+        font: inherit;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      button {
+        border: 0;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--accent-dark);
+      }
+
+      .secondary {
+        border: 1px solid var(--line);
+        background: white;
+        color: var(--accent);
+      }
+
+      .notice {
+        border-radius: 8px;
+        padding: 12px 14px;
+        background: #eef8f0;
+        color: var(--success);
+        font-weight: 700;
+      }
+
+      .error {
+        border-radius: 8px;
+        padding: 12px 14px;
+        background: #fff1f0;
+        color: var(--danger);
+        font-weight: 700;
+      }
+
+      .original {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>返信</h1>
+        {% if message %}
+          <div class="meta">
+            <span>From: {{ message.sender }}</span>
+            <span>Subject: {{ message.subject }}</span>
+          </div>
+        {% endif %}
+      </section>
+
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+      {% if sent %}
+        <div class="notice">送信しました。</div>
+      {% endif %}
+
+      {% if message %}
+        <section class="panel">
+          <form method="post">
+            <input type="hidden" name="message_id" value="{{ message.gmail_message_id }}">
+            <input type="hidden" name="return_url" value="{{ return_url or '' }}">
+            <label>
+              相手アドレス
+              <input type="text" name="to" value="{{ to_value }}" autocomplete="off">
+            </label>
+            <label>
+              CC
+              <input type="text" name="cc" value="{{ cc_value }}" autocomplete="off">
+            </label>
+            <label>
+              BCC
+              <input type="text" name="bcc" value="{{ bcc_value }}" autocomplete="off">
+            </label>
+            <label>
+              本文
+              <textarea name="body">{{ body_value }}</textarea>
+            </label>
+            <div class="actions">
+              <button type="submit" formaction="/replies/send">送信</button>
+              <a class="secondary" href="javascript:history.back()">戻る</a>
+            </div>
+          </form>
+        </section>
+        <section class="panel">
+          <div class="original">{{ message.body or message.snippet }}</div>
+        </section>
+      {% endif %}
+    </main>
+  </body>
+</html>

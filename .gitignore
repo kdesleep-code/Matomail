@@ -23,8 +23,8 @@ token.json
 *.db
 
 # Matomail generated data
-data/
-reports/
+/data/
+/reports/
 
 # OS / editor
 .DS_Store

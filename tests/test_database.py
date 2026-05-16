@@ -29,7 +29,10 @@ def _message(message_id: str = "msg-1") -> EmailMessage:
                 attachment_id="att-1",
             ),
         ),
+        body_html="<p>full body for local persistence</p>",
         size_estimate=2048,
+        label_ids=("INBOX",),
+        sender_candidates=("sender@example.com", "reply@example.com"),
     )
 
 
@@ -42,6 +45,7 @@ def test_create_all_creates_task_3_tables(tmp_path) -> None:
     assert {
         "emails",
         "email_analysis",
+        "email_digests",
         "filter_decisions",
         "processing_state",
     } <= table_names
@@ -70,12 +74,17 @@ def test_save_email_upserts_by_gmail_message_id(tmp_path) -> None:
     database.save_email(_message())
 
     assert database.count_emails() == 1
+    assert database.has_email("msg-1") is True
+    assert database.has_email("missing") is False
     assert database.get_processing_status("msg-1") == "pending"
 
     with database.session_factory() as session:
         record = session.scalar(select(EmailRecord))
         assert record is not None
         assert record.body == "full body for local persistence"
+        assert record.body_html == "<p>full body for local persistence</p>"
+        assert record.label_ids == '["INBOX"]'
+        assert record.sender_candidates == '["sender@example.com", "reply@example.com"]'
 
 
 def test_list_unanalyzed_emails_returns_saved_message_objects(tmp_path) -> None:
@@ -88,6 +97,9 @@ def test_list_unanalyzed_emails_returns_saved_message_objects(tmp_path) -> None:
     assert len(messages) == 1
     assert messages[0].gmail_message_id == "msg-1"
     assert messages[0].body == "full body for local persistence"
+    assert messages[0].body_html == "<p>full body for local persistence</p>"
+    assert messages[0].label_ids == ("INBOX",)
+    assert messages[0].sender_candidates == ("sender@example.com", "reply@example.com")
     assert messages[0].attachments[0].filename == "agenda.pdf"
 
 
@@ -112,6 +124,72 @@ def test_list_unanalyzed_emails_excludes_analyzed_messages(tmp_path) -> None:
     )
 
     assert database.list_unanalyzed_emails(limit=1) == []
+
+
+def test_digest_can_be_saved_and_digestable_messages_are_listed(tmp_path) -> None:
+    database = Database(tmp_path / "matomail.sqlite3")
+    database.create_all()
+    database.save_email(_message("high"))
+    database.save_email(_message("top"))
+    database.save_email(_message("low"))
+    database.save_analysis(
+        "high",
+        {
+            "summary_ja": "summary",
+            "category": "category",
+            "priority": "high",
+            "requires_reply": False,
+            "suggested_action_ja": "none",
+            "deadline_candidates": [],
+            "meeting_candidates": [],
+            "reply_draft_ja": "",
+            "confidence": 0.5,
+        },
+        llm_model="test-model",
+    )
+    database.save_analysis(
+        "top",
+        {
+            "summary_ja": "summary",
+            "category": "category",
+            "priority": "top",
+            "requires_reply": False,
+            "suggested_action_ja": "none",
+            "deadline_candidates": [],
+            "meeting_candidates": [],
+            "reply_draft_ja": "",
+            "confidence": 0.5,
+        },
+        llm_model="test-model",
+    )
+    database.save_analysis(
+        "low",
+        {
+            "summary_ja": "summary",
+            "category": "category",
+            "priority": "low",
+            "requires_reply": False,
+            "suggested_action_ja": "none",
+            "deadline_candidates": [],
+            "meeting_candidates": [],
+            "reply_draft_ja": "",
+            "confidence": 0.5,
+        },
+        llm_model="test-model",
+    )
+
+    assert [message.gmail_message_id for message in database.list_emails_needing_digest({"high", "medium"}, 10)] == ["high"]
+    database.save_digest(
+        "high",
+        summary_ja="要約",
+        translation_ja="翻訳",
+        llm_model="test-model",
+    )
+
+    digest = database.get_digest("high")
+    assert digest is not None
+    assert digest.summary_ja == "要約"
+    assert database.list_emails_needing_digest({"high", "medium"}, 10) == []
 
 
 def test_final_statuses_are_not_processable_but_pending_is(tmp_path) -> None:
@@ -142,6 +220,17 @@ def test_can_disable_email_body_persistence(tmp_path) -> None:
         record = session.scalar(select(EmailRecord))
         assert record is not None
         assert record.body == ""
+        assert record.body_html == ""
+
+
+def test_account_email_can_be_saved_for_report_filtering(tmp_path) -> None:
+    database = Database(tmp_path / "matomail.sqlite3")
+    database.create_all()
+
+    database.save_account_email("Me <ME@example.com>")
+    database.save_account_email("me@example.com")
+
+    assert database.list_account_emails() == ("me@example.com",)
 
 
 def test_large_database_is_rotated_to_timestamped_backup_directory(tmp_path) -> None:
@@ -208,11 +297,11 @@ def test_filter_rules_can_be_listed_disabled_and_deleted(tmp_path) -> None:
         action=FILTER_ACTION_ALWAYS_PROCESS,
         subject_query="Database",
         name="subject force",
-        priority=10,
     )
 
     rules = database.list_filter_rules()
-    assert [rule.id for rule in rules] == [second.id, first.id]
+    assert [rule.id for rule in rules] == [first.id, second.id]
+    assert first.priority < second.priority
 
     assert database.set_filter_rule_enabled(first.id, False) is True
     assert database.should_skip_analysis(_message()) is False
@@ -220,6 +309,21 @@ def test_filter_rules_can_be_listed_disabled_and_deleted(tmp_path) -> None:
     assert database.delete_filter_rule(second.id) is True
     assert [rule.id for rule in database.list_filter_rules()] == [first.id]
     assert database.delete_filter_rule(9999) is False
+
+
+def test_filter_rules_can_be_reordered_by_id_list(tmp_path) -> None:
+    database = RulesDatabase(tmp_path / "matomail_rules.sqlite3")
+    database.create_all()
+    first = database.add_sender_filter("first@example.com", name="first")
+    second = database.add_sender_filter("second@example.com", name="second")
+    third = database.add_sender_filter("third@example.com", name="third")
+
+    assert database.reorder_filter_rules([first.id, third.id, second.id]) is True
+    rules = database.list_filter_rules()
+
+    assert [rule.id for rule in rules] == [first.id, third.id, second.id]
+    assert [rule.priority for rule in rules] == [1000, 2000, 3000]
+    assert database.reorder_filter_rules([first.id, third.id]) is False
 
 
 def test_filter_rules_support_gmail_like_criteria(tmp_path) -> None:
@@ -310,6 +414,30 @@ def test_preclassify_rule_creates_analysis_without_llm(tmp_path) -> None:
     assert mail_database.list_unanalyzed_emails(limit=1) == []
 
 
+def test_top_preclassify_rule_creates_top_analysis_without_llm(tmp_path) -> None:
+    mail_database = Database(tmp_path / "matomail.sqlite3")
+    rules_database = RulesDatabase(tmp_path / "matomail_rules.sqlite3")
+    mail_database.create_all()
+    rules_database.create_all()
+    message = _message()
+    mail_database.save_email(message)
+    rules_database.add_filter_rule(
+        action=FILTER_ACTION_PRECLASSIFY,
+        name="top rule",
+        subject_query="Database",
+        preset_priority="top",
+    )
+
+    decision = rules_database.get_filter_decision(message)
+    assert decision is not None
+    analysis = mail_database.apply_preclassified_analysis(
+        message.gmail_message_id,
+        decision["preset_analysis"],
+    )
+
+    assert analysis.priority == "top"
+
+
 def test_always_process_can_override_lower_priority_skip_filter(tmp_path) -> None:
     database = RulesDatabase(tmp_path / "matomail_rules.sqlite3")
     database.create_all()
@@ -317,12 +445,12 @@ def test_always_process_can_override_lower_priority_skip_filter(tmp_path) -> Non
     database.add_filter_rule(
         action=FILTER_ACTION_SKIP_ANALYSIS,
         from_query="sender@example.com",
-        priority=0,
+        priority=1000,
     )
     database.add_filter_rule(
         action=FILTER_ACTION_ALWAYS_PROCESS,
         subject_query="Database",
-        priority=10,
+        priority=1000,
     )
 
     assert database.get_filter_action(_message()) == FILTER_ACTION_ALWAYS_PROCESS
@@ -353,8 +481,8 @@ def test_llm_instruction_rules_return_matching_instructions_by_priority(tmp_path
     )
 
     assert database.get_llm_instructions_for_email(_message()) == [
-        "学位プログラムのWeb更新は優先し，学類のWeb更新は低優先度にする。",
         "査読対応の依頼は Abstract を読み，専門との合致率を表示する。",
+        "学位プログラムのWeb更新は優先し，学類のWeb更新は低優先度にする。",
     ]
 
 
@@ -372,3 +500,40 @@ def test_llm_instruction_rules_can_be_listed_disabled_and_deleted(tmp_path) -> N
     assert database.get_llm_instructions_for_email(_message()) == []
     assert database.delete_llm_instruction_rule(rule.id) is True
     assert database.list_llm_instruction_rules() == []
+
+
+def test_llm_instruction_rules_can_be_updated_and_reordered(tmp_path) -> None:
+    database = RulesDatabase(tmp_path / "matomail_rules.sqlite3")
+    database.create_all()
+    first = database.add_llm_instruction_rule(
+        instruction="first instruction",
+        subject_query="Database",
+        name="first",
+    )
+    second = database.add_llm_instruction_rule(
+        instruction="second instruction",
+        has_words="local persistence",
+        name="second",
+    )
+
+    assert second.priority > first.priority
+    assert database.update_llm_instruction_rule(
+        first.id,
+        name="edited",
+        instruction="edited instruction",
+        priority=first.priority,
+        subject_query="Edited",
+        enabled=False,
+    ) is True
+    edited = database.get_llm_instruction_rule(first.id)
+    assert edited is not None
+    assert edited.name == "edited"
+    assert edited.instruction == "edited instruction"
+    assert edited.subject_query == "Edited"
+    assert edited.enabled is False
+
+    assert database.reorder_llm_instruction_rules([first.id, second.id]) is True
+    assert [rule.id for rule in database.list_llm_instruction_rules()] == [
+        first.id,
+        second.id,
+    ]

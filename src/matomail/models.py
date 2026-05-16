@@ -26,7 +26,10 @@ class EmailMessage:
     snippet: str
     body: str
     attachments: tuple[AttachmentInfo, ...]
+    body_html: str = ""
     size_estimate: int | None = None
+    label_ids: tuple[str, ...] = ()
+    sender_candidates: tuple[str, ...] = ()
 
     @property
     def has_attachments(self) -> bool:

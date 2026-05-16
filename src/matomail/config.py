@@ -72,6 +72,9 @@ class Settings:
     db_backup_dir: Path = field(
         default_factory=lambda: Path(_env("MATOMAIL_DB_BACKUP_DIR", "./data/backups"))
     )
+    attachment_cache_dir: Path = field(
+        default_factory=lambda: Path(_env("MATOMAIL_ATTACHMENT_CACHE_DIR", "./data/attachments"))
+    )
     db_max_size_mb: float = field(
         default_factory=lambda: _env_float("MATOMAIL_DB_MAX_SIZE_MB", 512.0)
     )
@@ -105,5 +108,13 @@ class Settings:
         default_factory=lambda: Path(_env("GOOGLE_TOKEN_FILE", "./token.json"))
     )
     google_oauth_port: int = field(default_factory=lambda: _env_int("GOOGLE_OAUTH_PORT", 8080))
+    gmail_sender_name: str = field(default_factory=lambda: _env("MATOMAIL_GMAIL_SENDER_NAME", ""))
     openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY", ""))
     llm_model: str = field(default_factory=lambda: _env("MATOMAIL_LLM_MODEL", "gpt-5.4-mini"))
+    account_emails: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            email.strip().lower()
+            for email in _env("MATOMAIL_ACCOUNT_EMAILS", "").split(",")
+            if email.strip()
+        )
+    )

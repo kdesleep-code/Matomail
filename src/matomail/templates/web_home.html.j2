@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Matomail</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --surface: #ffffff;
+        --text: #17202a;
+        --muted: #64707d;
+        --line: #d9dee5;
+        --accent: #176b87;
+        --accent-dark: #0f5268;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif;
+      }
+
+      main {
+        width: min(520px, calc(100vw - 32px));
+        display: grid;
+        gap: 18px;
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 4px;
+      }
+
+      button,
+      a {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        padding: 0 16px;
+        font: inherit;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      button {
+        border: 0;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--accent-dark);
+      }
+
+      a {
+        border: 1px solid var(--line);
+        color: var(--accent);
+        background: white;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Matomail</h1>
+      <p>本日のメールを読み込み、解析して、メール一覧ページを生成します。</p>
+      <div class="actions">
+        <form method="post" action="/runs">
+          <button type="submit">本日のメールを読み込む</button>
+        </form>
+        {% if latest_report_url %}
+          <a href="{{ latest_report_url }}">最新のメール一覧</a>
+        {% endif %}
+        <a href="/rules">優先度ルール</a>
+      </div>
+    </main>
+  </body>
+</html>

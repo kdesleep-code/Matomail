@@ -18,7 +18,9 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -73,6 +75,9 @@ class EmailRecord(MailBase):
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     snippet: Mapped[str] = mapped_column(Text, default="")
     body: Mapped[str] = mapped_column(Text, default="")
+    body_html: Mapped[str] = mapped_column(Text, default="")
+    label_ids: Mapped[str] = mapped_column(Text, default="[]")
+    sender_candidates: Mapped[str] = mapped_column(Text, default="[]")
     size_estimate: Mapped[int | None] = mapped_column(Integer)
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False)
     attachment_metadata: Mapped[str] = mapped_column(Text, default="[]")
@@ -107,6 +112,20 @@ class EmailAnalysisRecord(MailBase):
     email: Mapped[EmailRecord] = relationship(back_populates="analysis")
 
 
+class EmailDigestRecord(MailBase):
+    __tablename__ = "email_digests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email_id: Mapped[int] = mapped_column(ForeignKey("emails.id"), unique=True, index=True)
+    summary_ja: Mapped[str] = mapped_column(Text, default="")
+    translation_ja: Mapped[str] = mapped_column(Text, default="")
+    llm_model: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+    )
+
+
 class ProcessingStateRecord(MailBase):
     __tablename__ = "processing_state"
 
@@ -118,6 +137,18 @@ class ProcessingStateRecord(MailBase):
     calendar_registered: Mapped[bool] = mapped_column(Boolean, default=False)
     attachment_opened: Mapped[bool] = mapped_column(Boolean, default=False)
     report_path: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class AppSettingRecord(MailBase):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
@@ -240,6 +271,25 @@ class Database:
 
     def create_all(self) -> None:
         MailBase.metadata.create_all(self.engine)
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        columns = {column["name"] for column in inspect(self.engine).get_columns("emails")}
+        if "body_html" not in columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE emails ADD COLUMN body_html TEXT DEFAULT ''")
+                )
+        if "label_ids" not in columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE emails ADD COLUMN label_ids TEXT DEFAULT '[]'")
+                )
+        if "sender_candidates" not in columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE emails ADD COLUMN sender_candidates TEXT DEFAULT '[]'")
+                )
 
     def rotate_if_needed(self, max_size_bytes: int | None) -> Path | None:
         if max_size_bytes is None or not self.db_path.exists():
@@ -274,6 +324,12 @@ class Database:
             record.received_at = message.received_at
             record.snippet = message.snippet
             record.body = message.body if self.store_email_body else ""
+            record.body_html = message.body_html if self.store_email_body else ""
+            record.label_ids = json.dumps(list(message.label_ids), ensure_ascii=False)
+            record.sender_candidates = json.dumps(
+                list(message.sender_candidates),
+                ensure_ascii=False,
+            )
             record.size_estimate = message.size_estimate
             record.has_attachments = message.has_attachments
             record.attachment_metadata = json.dumps(
@@ -326,6 +382,45 @@ class Database:
             session.add(record)
             session.commit()
             return record
+
+    def save_digest(
+        self,
+        gmail_message_id: str,
+        *,
+        summary_ja: str,
+        translation_ja: str,
+        llm_model: str,
+    ) -> EmailDigestRecord:
+        with self.session_factory() as session:
+            email_record = self._get_email_record(session, gmail_message_id)
+            if email_record is None:
+                raise ValueError(f"email is not saved: {gmail_message_id}")
+
+            record = session.scalar(
+                select(EmailDigestRecord).where(
+                    EmailDigestRecord.email_id == email_record.id
+                )
+            )
+            if record is None:
+                record = EmailDigestRecord(email_id=email_record.id)
+                session.add(record)
+            record.summary_ja = summary_ja
+            record.translation_ja = translation_ja
+            record.llm_model = llm_model
+            record.created_at = datetime.now(UTC)
+            session.commit()
+            return record
+
+    def get_digest(self, gmail_message_id: str) -> EmailDigestRecord | None:
+        with self.session_factory() as session:
+            email_record = self._get_email_record(session, gmail_message_id)
+            if email_record is None:
+                return None
+            return session.scalar(
+                select(EmailDigestRecord).where(
+                    EmailDigestRecord.email_id == email_record.id
+                )
+            )
 
     def save_filter_decision(
         self,
@@ -400,9 +495,127 @@ class Database:
                     )
                 )
                 .order_by(EmailRecord.received_at.desc(), EmailRecord.id.desc())
-                .limit(limit)
+            ).all()
+            messages = [
+                _email_record_to_message(record)
+                for record in records
+                if not _email_record_is_sent(record)
+            ]
+            return messages[:limit]
+
+    def list_emails_needing_digest(
+        self,
+        priorities: set[str],
+        limit: int,
+    ) -> list[EmailMessage]:
+        with self.session_factory() as session:
+            records = session.scalars(select(EmailRecord)).all()
+            selected: list[tuple[datetime | None, EmailRecord]] = []
+            for record in records:
+                digest = session.scalar(
+                    select(EmailDigestRecord).where(
+                        EmailDigestRecord.email_id == record.id
+                    )
+                )
+                if digest is not None:
+                    continue
+                analysis = session.scalar(
+                    select(EmailAnalysisRecord)
+                    .where(EmailAnalysisRecord.email_id == record.id)
+                    .order_by(
+                        EmailAnalysisRecord.created_at.desc(),
+                        EmailAnalysisRecord.id.desc(),
+                    )
+                    .limit(1)
+                )
+                if analysis is None or analysis.priority not in priorities:
+                    continue
+                selected.append((record.received_at, record))
+            selected.sort(key=lambda item: item[0] or datetime.min.replace(tzinfo=UTC), reverse=True)
+            return [_email_record_to_message(record) for _, record in selected[:limit]]
+
+    def list_sent_emails_needing_digest(self, limit: int) -> list[EmailMessage]:
+        with self.session_factory() as session:
+            records = session.scalars(select(EmailRecord)).all()
+            selected: list[tuple[datetime | None, EmailRecord]] = []
+            for record in records:
+                if not _email_record_is_sent(record):
+                    continue
+                digest = session.scalar(
+                    select(EmailDigestRecord).where(
+                        EmailDigestRecord.email_id == record.id
+                    )
+                )
+                if digest is not None:
+                    continue
+                selected.append((record.received_at, record))
+            selected.sort(key=lambda item: item[0] or datetime.min.replace(tzinfo=UTC), reverse=True)
+            return [_email_record_to_message(record) for _, record in selected[:limit]]
+
+    def list_high_priority_emails_without_star(self) -> list[EmailMessage]:
+        with self.session_factory() as session:
+            records = session.scalars(select(EmailRecord)).all()
+            selected: list[tuple[datetime | None, EmailRecord]] = []
+            for record in records:
+                if _email_record_is_sent(record):
+                    continue
+                if "STARRED" in set(json.loads(record.label_ids or "[]")):
+                    continue
+                analysis = session.scalar(
+                    select(EmailAnalysisRecord)
+                    .where(EmailAnalysisRecord.email_id == record.id)
+                    .order_by(
+                        EmailAnalysisRecord.created_at.desc(),
+                        EmailAnalysisRecord.id.desc(),
+                    )
+                    .limit(1)
+                )
+                if analysis is None or analysis.priority != "high":
+                    continue
+                selected.append((record.received_at, record))
+            selected.sort(key=lambda item: item[0] or datetime.min.replace(tzinfo=UTC), reverse=True)
+            return [_email_record_to_message(record) for _, record in selected]
+
+    def get_email(self, gmail_message_id: str) -> EmailMessage | None:
+        with self.session_factory() as session:
+            record = self._get_email_record(session, gmail_message_id)
+            if record is None:
+                return None
+            return _email_record_to_message(record)
+
+    def has_email(self, gmail_message_id: str) -> bool:
+        with self.session_factory() as session:
+            return self._get_email_record(session, gmail_message_id) is not None
+
+    def list_saved_emails(self) -> list[EmailMessage]:
+        with self.session_factory() as session:
+            records = session.scalars(
+                select(EmailRecord).order_by(
+                    EmailRecord.created_at.desc(),
+                    EmailRecord.received_at.desc(),
+                    EmailRecord.id.desc(),
+                )
             ).all()
             return [_email_record_to_message(record) for record in records]
+
+    def clear_filter_decisions(self) -> None:
+        with self.session_factory() as session:
+            for record in session.scalars(select(FilterDecisionRecord)).all():
+                session.delete(record)
+            session.commit()
+
+    def list_emails_loaded_on_same_day(self, gmail_message_id: str) -> list[EmailMessage]:
+        with self.session_factory() as session:
+            source = self._get_email_record(session, gmail_message_id)
+            if source is None:
+                return []
+            loaded_date = source.created_at.date()
+            records = session.scalars(select(EmailRecord)).all()
+            return [
+                _email_record_to_message(record)
+                for record in records
+                if record.created_at.date() == loaded_date
+            ]
 
     def should_process(self, gmail_message_id: str) -> bool:
         with self.session_factory() as session:
@@ -433,6 +646,30 @@ class Database:
             state.report_path = report_path
             state.updated_at = datetime.now(UTC)
             session.commit()
+
+    def save_account_email(self, email_address: str) -> None:
+        normalized = _normalize_email_address(email_address)
+        if not normalized:
+            return
+        with self.session_factory() as session:
+            record = session.get(AppSettingRecord, "gmail_account_emails")
+            existing: list[str] = []
+            if record is not None and record.value:
+                existing = json.loads(record.value)
+            values = sorted({*existing, normalized})
+            if record is None:
+                record = AppSettingRecord(key="gmail_account_emails")
+                session.add(record)
+            record.value = json.dumps(values, ensure_ascii=False)
+            record.updated_at = datetime.now(UTC)
+            session.commit()
+
+    def list_account_emails(self) -> tuple[str, ...]:
+        with self.session_factory() as session:
+            record = session.get(AppSettingRecord, "gmail_account_emails")
+            if record is None or not record.value:
+                return ()
+            return tuple(json.loads(record.value))
 
     def count_emails(self) -> int:
         with self.session_factory() as session:
@@ -540,10 +777,13 @@ class RulesDatabase:
             raise ValueError(
                 "action must be one of ignore, always_process, preclassify, or skip_analysis"
             )
-        if preset_priority and preset_priority not in {"high", "medium", "low"}:
-            raise ValueError("preset_priority must be high, medium, or low")
+        if preset_priority and preset_priority not in {"top", "high", "medium", "low"}:
+            raise ValueError("preset_priority must be top, high, medium, or low")
         if size_comparison and size_comparison not in {"larger", "smaller"}:
             raise ValueError("size_comparison must be larger or smaller")
+
+        if priority == 0:
+            priority = self._next_filter_rule_priority()
 
         with self.session_factory() as session:
             rule = FilterRuleRecord(
@@ -585,6 +825,11 @@ class RulesDatabase:
             session.commit()
             return rule
 
+    def _next_filter_rule_priority(self) -> int:
+        with self.session_factory() as session:
+            priorities = session.scalars(select(FilterRuleRecord.priority)).all()
+            return (max(priorities) if priorities else 0) + 1000
+
     def add_sender_filter(
         self,
         email_address: str,
@@ -606,11 +851,85 @@ class RulesDatabase:
         with self.session_factory() as session:
             return session.scalars(
                 select(FilterRuleRecord).order_by(
-                    FilterRuleRecord.enabled.desc(),
-                    FilterRuleRecord.priority.desc(),
+                    FilterRuleRecord.priority.asc(),
                     FilterRuleRecord.id.asc(),
                 )
             ).all()
+
+    def get_filter_rule(self, rule_id: int) -> FilterRuleRecord | None:
+        with self.session_factory() as session:
+            return session.get(FilterRuleRecord, rule_id)
+
+    def update_filter_rule(
+        self,
+        rule_id: int,
+        *,
+        action: str,
+        name: str = "",
+        priority: int = 0,
+        preset_priority: str = "",
+        preset_category: str = "",
+        preset_summary_ja: str = "",
+        preset_suggested_action_ja: str = "",
+        from_query: str = "",
+        subject_query: str = "",
+        has_words: str = "",
+        note: str = "",
+        enabled: bool = True,
+    ) -> bool:
+        if action not in FILTER_ACTIONS:
+            raise ValueError(
+                "action must be one of ignore, always_process, preclassify, or skip_analysis"
+            )
+        if preset_priority and preset_priority not in {"top", "high", "medium", "low"}:
+            raise ValueError("preset_priority must be top, high, medium, or low")
+
+        with self.session_factory() as session:
+            rule = session.get(FilterRuleRecord, rule_id)
+            if rule is None:
+                return False
+            rule.action = action
+            rule.name = name
+            rule.priority = priority
+            rule.preset_priority = preset_priority
+            rule.preset_category = preset_category
+            rule.preset_summary_ja = preset_summary_ja
+            rule.preset_suggested_action_ja = preset_suggested_action_ja
+            rule.from_query = _normalize_email_address(from_query) or from_query.strip()
+            rule.subject_query = subject_query.strip()
+            rule.has_words = has_words.strip()
+            rule.note = note
+            rule.enabled = enabled
+            session.commit()
+            return True
+
+    def move_filter_rule(self, rule_id: int, direction: str) -> bool:
+        rules = self.list_filter_rules()
+        index = next((i for i, rule in enumerate(rules) if rule.id == rule_id), None)
+        if index is None:
+            return False
+        if direction == "up" and index > 0:
+            rules[index - 1], rules[index] = rules[index], rules[index - 1]
+        elif direction == "down" and index < len(rules) - 1:
+            rules[index + 1], rules[index] = rules[index], rules[index + 1]
+        else:
+            return False
+
+        return self.reorder_filter_rules([rule.id for rule in rules])
+
+    def reorder_filter_rules(self, ordered_rule_ids: list[int]) -> bool:
+        rules = self.list_filter_rules()
+        existing_ids = [rule.id for rule in rules]
+        if sorted(ordered_rule_ids) != sorted(existing_ids):
+            return False
+
+        with self.session_factory() as session:
+            for offset, rule_id in enumerate(ordered_rule_ids):
+                stored = session.get(FilterRuleRecord, rule_id)
+                if stored is not None:
+                    stored.priority = (offset + 1) * 1000
+            session.commit()
+        return True
 
     def set_filter_rule_enabled(self, rule_id: int, enabled: bool) -> bool:
         with self.session_factory() as session:
@@ -665,6 +984,8 @@ class RulesDatabase:
             raise ValueError("instruction must not be empty")
         if size_comparison and size_comparison not in {"larger", "smaller"}:
             raise ValueError("size_comparison must be larger or smaller")
+        if priority == 0:
+            priority = self._next_llm_instruction_rule_priority()
 
         with self.session_factory() as session:
             rule = LLMInstructionRuleRecord(
@@ -700,6 +1021,11 @@ class RulesDatabase:
             session.commit()
             return rule
 
+    def _next_llm_instruction_rule_priority(self) -> int:
+        with self.session_factory() as session:
+            priorities = session.scalars(select(LLMInstructionRuleRecord.priority)).all()
+            return (max(priorities) if priorities else 0) + 1000
+
     def get_llm_instructions_for_email(self, message: EmailMessage) -> list[str]:
         with self.session_factory() as session:
             rules = session.scalars(
@@ -711,18 +1037,92 @@ class RulesDatabase:
         matching_rules = [
             rule for rule in rules if _conditional_rule_matches(rule, message)
         ]
-        matching_rules.sort(key=lambda rule: (rule.priority, rule.id), reverse=True)
+        matching_rules.sort(key=lambda rule: (rule.priority, rule.id))
         return [rule.instruction for rule in matching_rules]
 
     def list_llm_instruction_rules(self) -> list[LLMInstructionRuleRecord]:
         with self.session_factory() as session:
             return session.scalars(
                 select(LLMInstructionRuleRecord).order_by(
-                    LLMInstructionRuleRecord.enabled.desc(),
-                    LLMInstructionRuleRecord.priority.desc(),
+                    LLMInstructionRuleRecord.priority.asc(),
                     LLMInstructionRuleRecord.id.asc(),
                 )
             ).all()
+
+    def get_llm_instruction_rule(self, rule_id: int) -> LLMInstructionRuleRecord | None:
+        with self.session_factory() as session:
+            return session.get(LLMInstructionRuleRecord, rule_id)
+
+    def update_llm_instruction_rule(
+        self,
+        rule_id: int,
+        *,
+        instruction: str,
+        name: str = "",
+        priority: int = 0,
+        from_query: str = "",
+        to_query: str = "",
+        subject_query: str = "",
+        has_words: str = "",
+        doesnt_have: str = "",
+        note: str = "",
+        enabled: bool = True,
+    ) -> bool:
+        cleaned_instruction = instruction.strip()
+        if not cleaned_instruction:
+            raise ValueError("instruction must not be empty")
+
+        with self.session_factory() as session:
+            rule = session.get(LLMInstructionRuleRecord, rule_id)
+            if rule is None:
+                return False
+            rule.name = name
+            rule.instruction = cleaned_instruction
+            rule.priority = priority
+            rule.from_query = _normalize_email_address(from_query) or from_query.strip()
+            rule.to_query = _normalize_email_address(to_query) or to_query.strip()
+            rule.subject_query = subject_query.strip()
+            rule.has_words = has_words.strip()
+            rule.doesnt_have = doesnt_have.strip()
+            rule.note = note
+            rule.enabled = enabled
+            session.commit()
+            return True
+
+    def reorder_llm_instruction_rules(self, ordered_rule_ids: list[int]) -> bool:
+        rules = self.list_llm_instruction_rules()
+        existing_ids = [rule.id for rule in rules]
+        if sorted(ordered_rule_ids) != sorted(existing_ids):
+            return False
+
+        with self.session_factory() as session:
+            for offset, rule_id in enumerate(ordered_rule_ids):
+                stored = session.get(LLMInstructionRuleRecord, rule_id)
+                if stored is not None:
+                    stored.priority = (offset + 1) * 1000
+            session.commit()
+        return True
+
+    def reorder_priority_rules(self, ordered_rule_keys: list[str]) -> bool:
+        filter_ids = [rule.id for rule in self.list_filter_rules()]
+        instruction_ids = [rule.id for rule in self.list_llm_instruction_rules()]
+        existing_keys = {
+            *(f"filter:{rule_id}" for rule_id in filter_ids),
+            *(f"instruction:{rule_id}" for rule_id in instruction_ids),
+        }
+        if set(ordered_rule_keys) != existing_keys or len(ordered_rule_keys) != len(existing_keys):
+            return False
+
+        with self.session_factory() as session:
+            for offset, key in enumerate(ordered_rule_keys):
+                kind, raw_id = key.split(":", 1)
+                rule_id = int(raw_id)
+                model = FilterRuleRecord if kind == "filter" else LLMInstructionRuleRecord
+                stored = session.get(model, rule_id)
+                if stored is not None:
+                    stored.priority = (offset + 1) * 1000
+            session.commit()
+        return True
 
     def set_llm_instruction_rule_enabled(self, rule_id: int, enabled: bool) -> bool:
         with self.session_factory() as session:
@@ -764,20 +1164,35 @@ class RulesDatabase:
         matching_rules.sort(
             key=lambda rule: (
                 rule.priority,
-                FILTER_ACTION_PRECEDENCE.get(rule.action, 0),
+                -FILTER_ACTION_PRECEDENCE.get(rule.action, 0),
                 rule.id,
-            ),
-            reverse=True,
+            )
         )
         rule = matching_rules[0]
         return {
             "action": rule.action,
+            "priority": rule.priority,
             "matched_rule_id": rule.id,
             "matched_rule_name": rule.name,
             "reason": _describe_rule(rule),
             "rule_snapshot": _rule_snapshot(rule),
             "preset_analysis": _preset_analysis(rule),
         }
+
+    def get_highest_llm_instruction_priority(self, message: EmailMessage) -> int | None:
+        with self.session_factory() as session:
+            rules = session.scalars(
+                select(LLMInstructionRuleRecord).where(
+                    LLMInstructionRuleRecord.enabled.is_(True)
+                )
+            ).all()
+
+        matching_priorities = [
+            rule.priority for rule in rules if _conditional_rule_matches(rule, message)
+        ]
+        if not matching_priorities:
+            return None
+        return min(matching_priorities)
 
     def close(self) -> None:
         self.engine.dispose()
@@ -853,8 +1268,15 @@ def _email_record_to_message(record: EmailRecord) -> EmailMessage:
         snippet=record.snippet,
         body=record.body,
         attachments=tuple(attachments),
+        body_html=record.body_html,
         size_estimate=record.size_estimate,
+        label_ids=tuple(json.loads(record.label_ids or "[]")),
+        sender_candidates=tuple(json.loads(record.sender_candidates or "[]")),
     )
+
+
+def _email_record_is_sent(record: EmailRecord) -> bool:
+    return "SENT" in set(json.loads(record.label_ids or "[]"))
 
 
 def _conditional_rule_matches(

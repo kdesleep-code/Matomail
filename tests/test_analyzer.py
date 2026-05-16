@@ -77,6 +77,12 @@ def test_parse_analysis_json_validates_required_fields() -> None:
     assert parsed["priority"] == "high"
 
 
+def test_parse_analysis_json_accepts_top_priority() -> None:
+    parsed = parse_analysis_json(_analysis_json("top"))
+
+    assert parsed["priority"] == "top"
+
+
 def test_analyze_retries_once_on_invalid_json() -> None:
     llm_client = _FakeLLMClient(["not json", _analysis_json("medium")])
     analyzer = EmailAnalyzer(llm_client=llm_client, prompt_template="{body}")

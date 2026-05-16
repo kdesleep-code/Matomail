@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>新規メール作成 - Matomail</title>
+    <style>
+      body { margin: 0; background: #f6f7f9; color: #17202a; font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif; }
+      main { width: min(900px, calc(100vw - 32px)); margin: 32px auto; display: grid; gap: 16px; }
+      .panel { border: 1px solid #d9dee5; border-radius: 8px; background: white; padding: 22px; }
+      h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+      form { display: grid; gap: 14px; }
+      label { display: grid; gap: 6px; font-weight: 700; }
+      input, textarea { width: 100%; box-sizing: border-box; border: 1px solid #d9dee5; border-radius: 6px; font: inherit; padding: 9px 10px; }
+      textarea { min-height: 260px; resize: vertical; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+      button, a { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; padding: 0 14px; font: inherit; font-weight: 700; text-decoration: none; }
+      button { border: 0; background: #176b87; color: white; cursor: pointer; }
+      a { border: 1px solid #d9dee5; color: #176b87; background: white; }
+      .error { border-radius: 8px; padding: 12px 14px; background: #fff1f0; color: #b42318; font-weight: 700; }
+      .notice { border-radius: 8px; padding: 12px 14px; background: #eef8f0; color: #287a3e; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel"><h1>新規メール作成</h1></section>
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
+      {% if sent %}<div class="notice">送信しました。</div>{% endif %}
+      <section class="panel">
+        <form method="post" action="/compose">
+          <label>相手アドレス<input type="text" name="to" value="{{ to_value }}" autocomplete="off"></label>
+          <label>CC<input type="text" name="cc" value="{{ cc_value }}" autocomplete="off"></label>
+          <label>BCC<input type="text" name="bcc" value="{{ bcc_value }}" autocomplete="off"></label>
+          <label>件名<input type="text" name="subject" value="{{ subject_value }}" autocomplete="off"></label>
+          <label>本文<textarea name="body">{{ body_value }}</textarea></label>
+          <div class="actions">
+            <button type="submit">送信</button>
+            <a href="/">戻る</a>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

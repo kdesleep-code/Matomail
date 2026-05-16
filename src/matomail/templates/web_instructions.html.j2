@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM追加指示 - Matomail</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --surface: #ffffff;
+        --text: #17202a;
+        --muted: #64707d;
+        --line: #d9dee5;
+        --accent: #176b87;
+        --danger: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif;
+        line-height: 1.55;
+      }
+      main {
+        width: min(980px, calc(100vw - 32px));
+        margin: 32px auto;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
+      .header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      .rules { display: grid; gap: 12px; }
+      .rule-card {
+        display: grid;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 18px;
+      }
+      .rule-card.dragging { opacity: 0.55; }
+      .rule-card.drag-over {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(23, 107, 135, 0.14);
+      }
+      .rule-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .rule-title { font-weight: 700; font-size: 17px; }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .instruction {
+        color: #303943;
+        white-space: pre-wrap;
+      }
+      .conditions {
+        display: grid;
+        gap: 4px;
+        color: #303943;
+        font-size: 14px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      a, button {
+        min-height: 36px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        padding: 0 12px;
+        font: inherit;
+        font-weight: 700;
+        text-decoration: none;
+      }
+      a, button {
+        border: 1px solid var(--line);
+        background: white;
+        color: var(--accent);
+      }
+      button { cursor: pointer; }
+      .danger button { color: var(--danger); }
+      .drag-handle {
+        align-self: start;
+        min-width: 42px;
+        cursor: grab;
+      }
+      .drag-handle:active { cursor: grabbing; }
+      .empty {
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 28px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .status {
+        min-height: 22px;
+        margin: -6px 0 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      form { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>LLM追加指示</h1>
+        <div class="header-actions">
+          <a href="/instructions/new">追加</a>
+          <a href="/rules">ーーー一覧</a>
+          <a href="/">読み込みページに戻る</a>
+        </div>
+      </header>
+      <div id="reorderStatus" class="status"></div>
+      <div id="rulesList" class="rules">
+        {% for rule in rules %}
+          <article class="rule-card" data-rule-id="{{ rule.id }}" draggable="true">
+            <div class="rule-head">
+              <div>
+                <div class="rule-title">{{ loop.index }}. {{ rule.name or ("Instruction #" ~ rule.id) }}</div>
+                <div class="meta">
+                  <span>id={{ rule.id }}</span>
+                  <span>{{ "enabled" if rule.enabled else "disabled" }}</span>
+                  <span>先先順={{ loop.index }}</span>
+                </div>
+              </div>
+              <button class="drag-handle" type="button" title="ドラッグして並べ替え" aria-label="ドラッグして並べ替え">↕</button>
+            </div>
+            <div class="instruction">{{ rule.instruction }}</div>
+            <div class="conditions">
+              {% if rule.from_query %}<div>送信アドレス: {{ rule.from_query }}</div>{% endif %}
+              {% if rule.to_query %}<div>受信アドレス: {{ rule.to_query }}</div>{% endif %}
+              {% if rule.subject_query %}<div>件名: {{ rule.subject_query }}</div>{% endif %}
+              {% if rule.has_words %}<div>本文などに含む: {{ rule.has_words }}</div>{% endif %}
+              {% if rule.doesnt_have %}<div>本文などに含まない: {{ rule.doesnt_have }}</div>{% endif %}
+              {% if rule.note %}<div>メモ: {{ rule.note }}</div>{% endif %}
+            </div>
+            <div class="actions">
+              <a href="/instructions/{{ rule.id }}/edit">編集</a>
+              <form class="danger" method="post" action="/instructions/{{ rule.id }}/delete">
+                <button type="submit">削除</button>
+              </form>
+            </div>
+          </article>
+        {% else %}
+          <div class="empty">追加指示はまだありません。</div>
+        {% endfor %}
+      </div>
+    </main>
+    <script>
+      const list = document.querySelector("#rulesList");
+      const status = document.querySelector("#reorderStatus");
+      let draggedCard = null;
+
+      function cards() {
+        return Array.from(list.querySelectorAll(".rule-card"));
+      }
+
+      function refreshNumbers() {
+        cards().forEach((card, index) => {
+          const title = card.querySelector(".rule-title");
+          const metaPriority = card.querySelector(".meta span:last-child");
+          title.textContent = title.textContent.replace(/^\d+\./, `${index + 1}.`);
+          metaPriority.textContent = `先先順=${index + 1}`;
+        });
+      }
+
+      async function saveOrder() {
+        const ruleIds = cards().map((card) => Number(card.dataset.ruleId));
+        status.textContent = "並び順を保存しています...";
+        const response = await fetch("/instructions/reorder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rule_ids: ruleIds }),
+        });
+        status.textContent = response.ok
+          ? "並び順を保存しました。"
+          : "並び順を保存できませんでした。ページを再読み込みしてください。";
+      }
+
+      function insertBeforePointer(target, event) {
+        if (!draggedCard || target === draggedCard) return;
+        const rect = target.getBoundingClientRect();
+        const before = event.clientY < rect.top + rect.height / 2;
+        list.insertBefore(draggedCard, before ? target : target.nextSibling);
+      }
+
+      cards().forEach((card) => {
+        card.addEventListener("dragstart", () => {
+          draggedCard = card;
+          card.classList.add("dragging");
+        });
+        card.addEventListener("dragend", async () => {
+          card.classList.remove("dragging");
+          cards().forEach((item) => item.classList.remove("drag-over"));
+          draggedCard = null;
+          refreshNumbers();
+          await saveOrder();
+        });
+        card.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          card.classList.add("drag-over");
+          insertBeforePointer(card, event);
+        });
+        card.addEventListener("dragleave", () => {
+          card.classList.remove("drag-over");
+        });
+      });
+    </script>
+  </body>
+</html>

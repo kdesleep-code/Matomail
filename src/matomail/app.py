@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import argparse
 
-from googleapiclient.errors import HttpError
+import uvicorn
 
-from .analyzer import EmailAnalyzer
 from .config import Settings
-from .database import Database, RulesDatabase
-from .database import FILTER_ACTION_ALWAYS_PROCESS, FILTER_ACTION_PRECLASSIFY
 from .database import FILTER_ACTION_SKIP_ANALYSIS
-from .gmail_client import GmailClient
-from .llm_client import LLMClient
+from .workflow import analyze_saved_messages
+from .workflow import create_rules_database
+from .workflow import fetch_processable_messages
+from .workflow import generate_report
 
 
 def main() -> int:
@@ -29,6 +28,18 @@ def main() -> int:
         default=1,
         help="Maximum number of saved emails to analyze. Defaults to 1.",
     )
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Generate local HTML report pages from saved emails.",
+    )
+    report_parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Generate reports without opening the browser.",
+    )
+    web_parser = subparsers.add_parser("web", help="Run the local Matomail web app.")
+    web_parser.add_argument("--host", default="127.0.0.1")
+    web_parser.add_argument("--port", type=int, default=8017)
     rules_parser = subparsers.add_parser("rules", help="Manage filter rules.")
     rules_subparsers = rules_parser.add_subparsers(dest="rules_command")
 
@@ -57,7 +68,7 @@ def main() -> int:
     add_subject_preclassify_parser.add_argument("subject")
     add_subject_preclassify_parser.add_argument(
         "--priority",
-        choices=["high", "medium", "low"],
+        choices=["top", "high", "medium", "low"],
         required=True,
     )
     add_subject_preclassify_parser.add_argument("--category", default="preclassified")
@@ -101,54 +112,12 @@ def main() -> int:
     settings = Settings()
 
     if args.command == "fetch":
-        database = Database(
-            settings.db_path,
-            max_size_bytes=int(settings.db_max_size_mb * 1024 * 1024),
-            backup_dir=settings.db_backup_dir,
-            store_email_body=settings.store_email_body,
-        )
-        rules_database = RulesDatabase(settings.rules_db_path)
-        database.create_all()
-        rules_database.create_all()
-        client = GmailClient.from_oauth(settings)
-        try:
-            messages = client.fetch_recent_messages(
-                lookback_days=settings.lookback_days,
-                max_results=settings.max_emails_per_run,
-            )
-        except HttpError as error:
-            print(f"Gmail API request failed: {error.reason}")
-            print("If Gmail API is disabled, enable it in Google Cloud Console and retry.")
-            return 1
-        database.save_emails(messages)
-        processable_messages = []
-        for message in database.filter_processable(messages):
-            decision = rules_database.get_filter_decision(message)
-            if decision is None:
-                processable_messages.append(message)
-                continue
-
-            database.save_filter_decision(
-                message.gmail_message_id,
-                action=decision["action"],
-                matched_rule_id=decision["matched_rule_id"],
-                matched_rule_name=decision["matched_rule_name"],
-                reason=decision["reason"],
-                rule_snapshot=decision["rule_snapshot"],
-            )
-            if decision["action"] == FILTER_ACTION_PRECLASSIFY:
-                database.apply_preclassified_analysis(
-                    message.gmail_message_id,
-                    decision["preset_analysis"],
-                )
-            elif decision["action"] == FILTER_ACTION_ALWAYS_PROCESS:
-                processable_messages.append(message)
-
-        messages = processable_messages
+        messages, fetched_count = fetch_processable_messages(settings)
         for index, message in enumerate(messages, start=1):
             attachment_note = " attachments" if message.has_attachments else ""
             print(f"{index}. [{message.received_at}] {message.subject}{attachment_note}")
-        print(f"Fetched {len(messages)} processable message(s).")
+        print(f"Fetched {fetched_count} message(s).")
+        print(f"{len(messages)} processable message(s).")
         return 0
 
     if args.command == "analyze":
@@ -156,45 +125,34 @@ def main() -> int:
             print("--limit must be at least 1.")
             return 1
 
-        database = Database(
-            settings.db_path,
-            max_size_bytes=int(settings.db_max_size_mb * 1024 * 1024),
-            backup_dir=settings.db_backup_dir,
-            store_email_body=settings.store_email_body,
-        )
-        rules_database = RulesDatabase(settings.rules_db_path)
-        database.create_all()
-        rules_database.create_all()
-
-        messages = database.list_unanalyzed_emails(limit=args.limit)
-        messages = rules_database.filter_processable(messages)
-        if not messages:
+        analyzed_count = analyze_saved_messages(settings, limit=args.limit)
+        if analyzed_count == 0:
             print("No saved emails need analysis.")
             return 0
+        print(f"Analyzed {analyzed_count} message(s).")
+        return 0
 
-        analyzer = EmailAnalyzer(llm_client=LLMClient.from_settings(settings))
-        for index, message in enumerate(messages, start=1):
-            analysis = analyzer.analyze_and_save(
-                message,
-                mail_database=database,
-                rules_database=rules_database,
-                llm_model=settings.llm_model,
-            )
-            print(
-                f"{index}. {message.subject} -> "
-                f"{analysis['priority']} / {analysis['category']}"
-            )
-        print(f"Analyzed {len(messages)} message(s).")
+    if args.command == "report":
+        report_path = generate_report(
+            settings,
+            open_browser=settings.auto_open_report and not args.no_open,
+        )
+        if report_path is None:
+            print("No saved emails to report.")
+            return 0
+        print(f"Generated report: {report_path}")
+        return 0
+
+    if args.command == "web":
+        uvicorn.run("matomail.web:app", host=args.host, port=args.port, reload=False)
         return 0
 
     if args.command == "rules":
-        rules_database = RulesDatabase(settings.rules_db_path)
-        rules_database.create_all()
+        rules_database = create_rules_database(settings)
         return _handle_rules_command(args, rules_database)
 
     if args.command == "instructions":
-        rules_database = RulesDatabase(settings.rules_db_path)
-        rules_database.create_all()
+        rules_database = create_rules_database(settings)
         return _handle_instructions_command(args, rules_database)
 
     print(f"Matomail is configured to write reports to {settings.report_dir}")

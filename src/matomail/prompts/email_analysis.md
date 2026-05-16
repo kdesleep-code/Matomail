@@ -1,8 +1,7 @@
 # Email Analysis Prompt
 
-あなたは Matomail のメール解析エンジンです。
-
-以下のメールを解析し，日本語で JSON のみを返してください。
+あなたは Matomail のメール分析エンジンです。
+以下のメールを分析し、日本語で JSON のみを返してください。
 
 ## 追加のユーザー指示
 
@@ -11,7 +10,6 @@
 ## 出力 JSON
 
 必ず以下のキーを含めてください。
-
 - summary_ja
 - category
 - priority
@@ -24,7 +22,7 @@
 - reply_draft_ja
 - confidence
 
-`priority` は `high`, `medium`, `low` のいずれかにしてください。
+`priority` は `top`, `high`, `medium`, `low` のいずれかにしてください。
 
 ## メール
 

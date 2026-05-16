@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>返信予約 - Matomail</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --surface: #ffffff;
+        --text: #17202a;
+        --muted: #64707d;
+        --line: #d9dee5;
+        --accent: #176b87;
+        --accent-dark: #0f5268;
+        --danger: #b42318;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif;
+        line-height: 1.55;
+      }
+
+      main {
+        width: min(760px, calc(100vw - 32px));
+        margin: 32px auto;
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 22px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 26px;
+        letter-spacing: 0;
+      }
+
+      form {
+        display: grid;
+        gap: 14px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-weight: 700;
+      }
+
+      input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--text);
+        font: inherit;
+        padding: 9px 10px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      button,
+      a {
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        padding: 0 14px;
+        font: inherit;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      button {
+        border: 0;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--accent-dark);
+      }
+
+      a {
+        border: 1px solid var(--line);
+        background: white;
+        color: var(--accent);
+      }
+
+      .error {
+        border-radius: 8px;
+        padding: 12px 14px;
+        background: #fff1f0;
+        color: var(--danger);
+        font-weight: 700;
+      }
+
+      .hint {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>返信予約</h1>
+        <p class="hint">送信予定日時を選択してください。</p>
+      </section>
+
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+
+      {% if message %}
+        <section class="panel">
+          <form method="post" action="/replies/schedule/confirm">
+            <input type="hidden" name="message_id" value="{{ message.gmail_message_id }}">
+            <input type="hidden" name="to" value="{{ to_value }}">
+            <input type="hidden" name="cc" value="{{ cc_value }}">
+            <input type="hidden" name="bcc" value="{{ bcc_value }}">
+            <input type="hidden" name="body" value="{{ body_value }}">
+            <label>
+              送信予定日時
+              <input type="datetime-local" name="scheduled_at" value="{{ scheduled_at or '' }}" required>
+            </label>
+            <div class="actions">
+              <button type="submit">予約する</button>
+              <a href="javascript:history.back()">戻る</a>
+            </div>
+          </form>
+        </section>
+      {% endif %}
+    </main>
+  </body>
+</html>

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>シリーズにない送信メール - Matomail</title>
+    <style>
+      body { margin: 0; background: #f6f7f9; color: #17202a; font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif; line-height: 1.55; }
+      main { width: min(1040px, calc(100vw - 32px)); margin: 32px auto; display: grid; gap: 16px; }
+      .panel, .mail { border: 1px solid #d9dee5; border-radius: 8px; background: white; padding: 18px; }
+      h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+      a { color: #176b87; font-weight: 700; }
+      .action { min-height: 38px; display: inline-flex; align-items: center; border: 1px solid #d9dee5; border-radius: 6px; padding: 0 12px; background: white; text-decoration: none; }
+      .list { display: grid; gap: 10px; }
+      .subject { font-size: 17px; }
+      .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: #64707d; font-size: 14px; margin-top: 6px; }
+      .snippet { margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>シリーズにない送信メール</h1>
+        <div class="actions">
+          <a class="action" href="/">本日のメールを読み込む</a>
+          <a class="action" href="/compose">新規メール作成</a>
+        </div>
+      </section>
+      <section class="list">
+        {% for message in messages %}
+          <article class="mail">
+            <a class="subject" href="https://mail.google.com/mail/u/0/#all/{{ message.gmail_thread_id or message.gmail_message_id }}" target="_blank" rel="noopener">{{ message.subject or "(件名なし)" }}</a>
+            <div class="meta">
+              <span>From: {{ message.sender }}</span>
+              <span>To: {{ message.recipients|join(", ") }}</span>
+              <span>送信: {{ message.received_at }}</span>
+            </div>
+            <div class="snippet">{{ message.snippet or message.body[:240] }}</div>
+          </article>
+        {% else %}
+          <article class="mail">該当するメールはありません。</article>
+        {% endfor %}
+      </section>
+    </main>
+  </body>
+</html>

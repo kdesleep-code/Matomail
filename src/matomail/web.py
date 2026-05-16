@@ -5,8 +5,9 @@ from __future__ import annotations
 import mimetypes
 import json
 import threading
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, timedelta, timezone as fixed_timezone
+from datetime import UTC, datetime, timedelta, timezone as fixed_timezone
 from email.utils import getaddresses
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -18,21 +19,49 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from googleapiclient.errors import HttpError
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 
+from .calendar_client import CALENDAR_EVENTS_SCOPE, CalendarClient
 from .config import Settings
 from .database import FILTER_ACTION_IGNORE
 from .database import FILTER_ACTION_PRECLASSIFY, FILTER_ACTION_SKIP_ANALYSIS
+from .database import ProcessingStateRecord
 from .gmail_client import GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE, GmailClient
 from .llm_client import LLMClient
 from .models import EmailMessage
+from .report import PRIORITY_RANK, ReportEmail, ReportGenerator, _active_list_emails
 from .workflow import create_mail_database, create_rules_database, generate_report
 from .workflow import LoadMailResult, load_today_mail
+
+
+GENERATION_INSTRUCTION_KEYS = {
+    "compose": "llm_instruction.compose",
+    "reply": "llm_instruction.reply",
+}
+GENERATION_INSTRUCTION_LABELS = {
+    "compose": "新規メールの文面を生成するとき",
+    "reply": "返信メールの文面を生成するとき",
+}
 
 
 settings = Settings()
 settings.report_dir.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Matomail")
+
+def refresh_report_on_startup() -> None:
+    try:
+        generate_report(settings, open_browser=False)
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    refresh_report_on_startup()
+    yield
+
+
+app = FastAPI(title="Matomail", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 app.mount("/reports", StaticFiles(directory=str(settings.report_dir)), name="reports")
 
@@ -425,22 +454,270 @@ async def send_new_message(request: Request) -> HTMLResponse:
             {**values, "error": _reply_send_error_message(error), "sent": False},
             status_code=200,
         )
-    return templates.TemplateResponse(
-        request,
-        "web_compose.html.j2",
-        {**values, "error": "", "sent": True},
-    )
+    return RedirectResponse(_latest_report_url() or "/", status_code=303)
 
 
-@app.get("/singletons", response_class=HTMLResponse)
-def singleton_messages_page(request: Request) -> HTMLResponse:
+@app.get("/singletons")
+def singleton_messages_page() -> RedirectResponse:
+    return RedirectResponse("/unhandled", status_code=303)
+
+
+@app.get("/completed")
+def completed_messages_page() -> RedirectResponse:
+    latest_url = _latest_report_url() or "/"
+    if latest_url == "/":
+        return RedirectResponse(latest_url, status_code=303)
+    return RedirectResponse(f"{latest_url}#completed", status_code=303)
+
+
+@app.get("/unhandled", response_class=HTMLResponse)
+def unhandled_messages_page(request: Request) -> HTMLResponse:
     database = create_mail_database(settings)
-    messages = _single_message_threads(database.list_saved_emails())
+    messages = _unhandled_priority_messages(database)
     return templates.TemplateResponse(
         request,
-        "web_singletons.html.j2",
+        "web_unhandled.html.j2",
         {"messages": messages},
     )
+
+
+@app.post("/messages/{message_id}/opened")
+def mark_message_opened(message_id: str) -> JSONResponse:
+    database = create_mail_database(settings)
+    if database.get_email(message_id) is None:
+        return JSONResponse({"ok": False, "error": "message not found"}, status_code=404)
+    database.mark_web_opened(message_id)
+    generate_report(settings, open_browser=False)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/messages/{message_id}/resolved")
+async def set_message_resolved(request: Request, message_id: str) -> JSONResponse:
+    database = create_mail_database(settings)
+    if database.get_email(message_id) is None:
+        return JSONResponse({"ok": False, "error": "message not found"}, status_code=404)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    database.set_resolved(message_id, bool(payload.get("resolved")))
+    generate_report(settings, open_browser=False)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/calendar-events")
+async def create_calendar_event(request: Request) -> Response:
+    form = parse_qs((await request.body()).decode("utf-8"))
+    message_id = _form_value(form, "message_id")
+    return_url = _safe_return_url(_form_value(form, "return_url")) or "/reports/index.html"
+    database = create_mail_database(settings)
+    message = database.get_email(message_id)
+    if message is None:
+        return HTMLResponse("message not found", status_code=404)
+
+    title = _form_value(form, "title").strip() or message.subject or "Matomail event"
+    start_time = _form_value(form, "start_time").strip()
+    end_time = _form_value(form, "end_time").strip()
+    timezone = _form_value(form, "timezone").strip() or getattr(settings, "timezone", "Asia/Tokyo")
+    location = _form_value(form, "location").strip()
+    attendees = tuple(_address_list(_form_value(form, "attendees")))
+    description = _form_value(form, "description").strip()
+    description = _calendar_description_with_source_url(description, message)
+    if not start_time or not end_time:
+        return HTMLResponse("start_time and end_time are required", status_code=400)
+
+    try:
+        event = _create_calendar_event_via_google(
+            title=title,
+            start_time=start_time,
+            end_time=end_time,
+            timezone=timezone,
+            location=location,
+            attendees=attendees,
+            description=description,
+        )
+    except HttpError as error:
+        if _is_insufficient_auth_scope(error):
+            try:
+                event = _create_calendar_event_via_google(
+                    title=title,
+                    start_time=start_time,
+                    end_time=end_time,
+                    timezone=timezone,
+                    location=location,
+                    attendees=attendees,
+                    description=description,
+                    force_consent=True,
+                )
+            except Exception as retry_error:
+                return HTMLResponse(_calendar_error_message(retry_error), status_code=502)
+        else:
+            return HTMLResponse(_calendar_error_message(error), status_code=502)
+    except Exception as error:
+        return HTMLResponse(_calendar_error_message(error), status_code=500)
+
+    database.save_calendar_event(
+        message_id,
+        title=title,
+        start_time=_parse_calendar_datetime(start_time),
+        end_time=_parse_calendar_datetime(end_time),
+        timezone=timezone,
+        location=location,
+        attendees=attendees,
+        calendar_event_id=str(event.get("id", "")),
+    )
+    database.set_meeting_candidates(
+        message_id,
+        [
+            {
+                "title": title,
+                "start_time": start_time,
+                "end_time": end_time,
+                "timezone": timezone,
+                "location": location,
+                "attendees": list(attendees),
+                "description": description,
+            }
+        ],
+        hidden=False,
+    )
+    generate_report(settings, open_browser=False)
+    return RedirectResponse(return_url, status_code=303)
+
+
+@app.post("/calendar-candidates/extract")
+async def extract_calendar_candidates(request: Request) -> Response:
+    form = parse_qs((await request.body()).decode("utf-8"))
+    message_id = _form_value(form, "message_id")
+    return_url = _safe_return_url(_form_value(form, "return_url")) or "/reports/index.html"
+    force = _form_value(form, "force") == "1"
+    database = create_mail_database(settings)
+    message = database.get_email(message_id)
+    if message is None:
+        return HTMLResponse("message not found", status_code=404)
+    if not force and database.get_meeting_candidates(message_id):
+        database.set_calendar_candidates_hidden(message_id, False)
+        generate_report(settings, open_browser=False)
+        return RedirectResponse(return_url, status_code=303)
+    thread_messages = [
+        item
+        for item in database.list_saved_emails()
+        if (item.gmail_thread_id or item.gmail_message_id)
+        == (message.gmail_thread_id or message.gmail_message_id)
+    ]
+    prompt = _calendar_candidate_prompt(message, thread_messages)
+    try:
+        raw = LLMClient.from_settings(settings).generate_text(prompt)
+        candidates = _parse_calendar_candidates(raw)
+    except Exception as error:
+        return HTMLResponse(f"カレンダー候補の抽出に失敗しました: {error}", status_code=500)
+    database.set_meeting_candidates(message_id, candidates, hidden=False)
+    generate_report(settings, open_browser=False)
+    return RedirectResponse(return_url, status_code=303)
+
+
+@app.post("/calendar-candidates/clear")
+async def clear_calendar_candidates(request: Request) -> Response:
+    form = parse_qs((await request.body()).decode("utf-8"))
+    message_id = _form_value(form, "message_id")
+    return_url = _safe_return_url(_form_value(form, "return_url")) or "/reports/index.html"
+    database = create_mail_database(settings)
+    if database.get_email(message_id) is None:
+        return HTMLResponse("message not found", status_code=404)
+    database.set_calendar_candidates_hidden(message_id, True)
+    generate_report(settings, open_browser=False)
+    return RedirectResponse(return_url, status_code=303)
+
+
+@app.post("/calendar-events/{event_record_id}/cancel")
+async def cancel_calendar_event(request: Request, event_record_id: int) -> Response:
+    form = parse_qs((await request.body()).decode("utf-8"))
+    return_url = _safe_return_url(_form_value(form, "return_url")) or "/reports/index.html"
+    database = create_mail_database(settings)
+    event_record = database.get_calendar_event(event_record_id)
+    if event_record is not None and event_record.calendar_event_id:
+        try:
+            _delete_calendar_event_via_google(event_record.calendar_event_id)
+        except HttpError as error:
+            if not _is_missing_calendar_event(error):
+                return HTMLResponse(_calendar_error_message(error), status_code=502)
+        except Exception as error:
+            return HTMLResponse(_calendar_error_message(error), status_code=500)
+    cancelled_message_id = database.mark_calendar_event_cancelled(event_record_id)
+    if cancelled_message_id:
+        database.set_calendar_candidates_hidden(cancelled_message_id, True)
+    generate_report(settings, open_browser=False)
+    return RedirectResponse(return_url, status_code=303)
+
+
+@app.get("/generation-instructions", response_class=HTMLResponse)
+def generation_instructions_page(request: Request) -> HTMLResponse:
+    database = create_mail_database(settings)
+    return templates.TemplateResponse(
+        request,
+        "web_generation_instructions.html.j2",
+        {
+            "items": [
+                {
+                    "kind": kind,
+                    "label": GENERATION_INSTRUCTION_LABELS[kind],
+                    "instruction": database.get_app_setting(key),
+                    "edit_url": f"/generation-instructions/{kind}/edit",
+                }
+                for kind, key in GENERATION_INSTRUCTION_KEYS.items()
+            ],
+        },
+    )
+
+
+@app.get("/generation-instructions/{kind}/edit", response_class=HTMLResponse)
+def edit_generation_instruction_page(request: Request, kind: str) -> HTMLResponse:
+    if kind not in GENERATION_INSTRUCTION_KEYS:
+        return templates.TemplateResponse(
+            request,
+            "web_generation_instruction_edit.html.j2",
+            {
+                "kind": kind,
+                "label": "",
+                "instruction": "",
+                "error": "指定された追加指示が見つかりません。",
+            },
+            status_code=404,
+        )
+    database = create_mail_database(settings)
+    return templates.TemplateResponse(
+        request,
+        "web_generation_instruction_edit.html.j2",
+        {
+            "kind": kind,
+            "label": GENERATION_INSTRUCTION_LABELS[kind],
+            "instruction": database.get_app_setting(GENERATION_INSTRUCTION_KEYS[kind]),
+            "error": "",
+        },
+    )
+
+
+@app.post("/generation-instructions/{kind}/edit", response_class=HTMLResponse)
+async def update_generation_instruction(request: Request, kind: str) -> HTMLResponse:
+    form = parse_qs((await request.body()).decode("utf-8"))
+    if kind not in GENERATION_INSTRUCTION_KEYS:
+        return templates.TemplateResponse(
+            request,
+            "web_generation_instruction_edit.html.j2",
+            {
+                "kind": kind,
+                "label": "",
+                "instruction": _form_value(form, "instruction"),
+                "error": "指定された追加指示が見つかりません。",
+            },
+            status_code=404,
+        )
+    database = create_mail_database(settings)
+    database.set_app_setting(
+        GENERATION_INSTRUCTION_KEYS[kind],
+        _form_value(form, "instruction").strip(),
+    )
+    return RedirectResponse("/generation-instructions", status_code=303)
 
 
 @app.post("/replies/schedule/confirm", response_class=HTMLResponse)
@@ -1093,6 +1370,7 @@ def _refresh_rules_and_report() -> None:
 def _build_reply_draft_prompt(message: EmailMessage, policy: str) -> str:
     base_prompt = _load_reply_draft_prompt()
     policy_text = policy or "特に指定なし。元メールに対して自然で丁寧に返信してください。"
+    additional_instruction = _generation_instruction_text("reply")
     recipients = ", ".join(message.recipients)
     cc = ", ".join(message.cc)
     body = (message.body or message.snippet or "").strip()
@@ -1109,6 +1387,9 @@ def _build_reply_draft_prompt(message: EmailMessage, policy: str) -> str:
 {policy_text}
 
 元メール:
+LLMへの追加指示:
+{additional_instruction or "なし"}
+
 From: {message.sender}
 To: {recipients}
 Cc: {cc}
@@ -1119,6 +1400,14 @@ Snippet: {message.snippet}
 本文:
 {body}
 """
+
+
+def _generation_instruction_text(kind: str) -> str:
+    key = GENERATION_INSTRUCTION_KEYS.get(kind)
+    if key is None:
+        return ""
+    database = create_mail_database(settings)
+    return database.get_app_setting(key).strip()
 
 
 def _load_reply_draft_prompt() -> str:
@@ -1172,6 +1461,164 @@ def _send_reply_via_gmail(
     )
 
 
+def _create_calendar_event_via_google(
+    *,
+    title: str,
+    start_time: str,
+    end_time: str,
+    timezone: str,
+    location: str,
+    attendees: tuple[str, ...],
+    description: str,
+    force_consent: bool = False,
+) -> dict:
+    return CalendarClient.from_oauth(
+        settings,
+        scopes=[CALENDAR_EVENTS_SCOPE],
+        force_consent=force_consent,
+    ).create_event(
+        title=title,
+        start_time=start_time,
+        end_time=end_time,
+        timezone=timezone,
+        location=location,
+        attendees=attendees,
+        description=description,
+    )
+
+
+def _delete_calendar_event_via_google(event_id: str) -> None:
+    CalendarClient.from_oauth(
+        settings,
+        scopes=[CALENDAR_EVENTS_SCOPE],
+    ).delete_event(event_id)
+
+
+def _calendar_description_with_source_url(description: str, message: EmailMessage) -> str:
+    gmail_id = message.gmail_thread_id or message.gmail_message_id
+    if not gmail_id:
+        return description
+    source_url = f"https://mail.google.com/mail/u/0/#all/{gmail_id}"
+    if source_url in description:
+        return description
+    prefix = description.strip()
+    suffix = f"元メール: {source_url}"
+    return f"{prefix}\n\n{suffix}" if prefix else suffix
+
+
+def _is_missing_calendar_event(error: HttpError) -> bool:
+    status = getattr(getattr(error, "resp", None), "status", None)
+    return status in {404, 410}
+
+
+def _calendar_candidate_prompt(
+    target_message: EmailMessage,
+    thread_messages: list[EmailMessage],
+) -> str:
+    ordered = sorted(
+        thread_messages or [target_message],
+        key=lambda item: item.received_at or datetime.min.replace(tzinfo=UTC),
+    )
+    context = "\n\n".join(
+        f"""---
+From: {message.sender}
+To: {", ".join(message.recipients)}
+Cc: {", ".join(message.cc)}
+Subject: {message.subject}
+Received: {message.received_at.isoformat() if message.received_at else ""}
+Body:
+{(message.body or message.snippet)[:5000]}"""
+        for message in ordered
+    )
+    timezone = getattr(settings, "timezone", "Asia/Tokyo")
+    return f"""あなたはメール本文からGoogleカレンダー登録候補を抽出するアシスタントです。
+メールスレッドを読み、予定・面談・会議・締切ではなくカレンダーに入れるべき予定だけを抽出してください。
+
+基準日時は対象メールの受信日時です:
+{target_message.received_at.isoformat() if target_message.received_at else ""}
+
+相対表現（例: 水曜日、明日、来週火曜）は、基準日時と文脈から具体的な日時へ解決してください。
+時刻が明示されていて終了時刻がない場合は、通常の会議として1時間後を終了時刻にしてください。
+タイムゾーンが不明な場合は {timezone} としてください。
+予定がない場合は [] を返してください。
+
+必ずJSON配列のみを返してください。説明文やMarkdownは不要です。
+各要素は次のキーを持つJSONオブジェクトにしてください:
+- title
+- start_time（ISO 8601）
+- end_time（ISO 8601）
+- timezone
+- location
+- attendees（メールアドレス配列）
+- description
+- confidence（0から1）
+
+メールスレッド:
+{context}
+"""
+
+
+def _parse_calendar_candidates(raw: str) -> list[dict]:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    start = text.find("[")
+    end = text.rfind("]")
+    if start >= 0 and end >= start:
+        text = text[start : end + 1]
+    parsed = json.loads(text)
+    if not isinstance(parsed, list):
+        raise ValueError("calendar candidate response must be a JSON array")
+    candidates = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        candidates.append(
+            {
+                "title": str(item.get("title") or ""),
+                "start_time": str(item.get("start_time") or ""),
+                "end_time": str(item.get("end_time") or ""),
+                "timezone": str(item.get("timezone") or getattr(settings, "timezone", "Asia/Tokyo")),
+                "location": str(item.get("location") or ""),
+                "attendees": [
+                    str(address)
+                    for address in item.get("attendees", [])
+                    if str(address).strip()
+                ]
+                if isinstance(item.get("attendees", []), list)
+                else [],
+                "description": str(item.get("description") or ""),
+                "confidence": float(item.get("confidence") or 0.0),
+            }
+        )
+    return candidates
+
+
+def _parse_calendar_datetime(value: str):
+    if not value:
+        return None
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _calendar_error_message(error: Exception) -> str:
+    if isinstance(error, HttpError):
+        detail = ""
+        try:
+            payload = json.loads(error.content.decode("utf-8"))
+            detail = payload.get("error", {}).get("message", "")
+        except Exception:
+            detail = error.content.decode("utf-8", errors="replace")
+        if detail:
+            return f"カレンダー登録に失敗しました: {detail}"
+    return f"カレンダー登録に失敗しました: {error}"
+
+
 def _safe_return_url(value: str) -> str:
     stripped = value.strip()
     if not stripped:
@@ -1184,21 +1631,82 @@ def _safe_return_url(value: str) -> str:
     return ""
 
 
-def _single_message_threads(messages: list[EmailMessage]) -> list[EmailMessage]:
+def _completed_thread_latest_messages(database) -> list[EmailMessage]:
+    messages = database.list_saved_emails()
+    resolved_ids = _resolved_message_ids(database)
     groups: dict[str, list[EmailMessage]] = {}
     for message in messages:
         key = message.gmail_thread_id or message.gmail_message_id
         groups.setdefault(key, []).append(message)
-    singles = [
-        group[0]
-        for group in groups.values()
-        if len(group) == 1 and "SENT" in set(group[0].label_ids)
-    ]
-    singles.sort(
+    completed = []
+    for group in groups.values():
+        latest = max(
+            group,
+            key=lambda message: (
+                message.received_at.timestamp() if message.received_at else 0,
+                message.gmail_message_id,
+            ),
+        )
+        if "SENT" in set(latest.label_ids) or latest.gmail_message_id in resolved_ids:
+            completed.append(latest)
+    completed.sort(
         key=lambda message: message.received_at.timestamp() if message.received_at else 0,
         reverse=True,
     )
-    return singles
+    return completed
+
+
+def _unhandled_priority_messages(database) -> list[dict[str, object]]:
+    generator = ReportGenerator(
+        database=database,
+        report_dir=settings.report_dir,
+        timezone=getattr(settings, "timezone", "Asia/Tokyo"),
+        excluded_sender_addresses=tuple(getattr(settings, "account_emails", ()) or ()),
+    )
+    emails = _active_list_emails(generator._list_report_emails())
+    groups: dict[str, list[ReportEmail]] = {}
+    for email in emails:
+        key = email.gmail_thread_id or email.gmail_message_id
+        groups.setdefault(key, []).append(email)
+
+    rows: list[dict[str, object]] = []
+    for group in groups.values():
+        latest = max(
+            group,
+            key=lambda email: (
+                email.received_at or datetime.min.replace(tzinfo=UTC),
+                email.loaded_at,
+            ),
+        )
+        if latest.analysis.priority not in {"high", "medium"}:
+            continue
+        rows.append(
+            {
+                "email": latest,
+                "detail_href": f"/reports/{latest.report_date}/{latest.message_href}",
+                "gmail_href": f"https://mail.google.com/mail/u/0/#all/{latest.gmail_thread_id or latest.gmail_message_id}",
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            -PRIORITY_RANK.get(row["email"].analysis.priority, 2),  # type: ignore[union-attr]
+            row["email"].received_at or datetime.max.replace(tzinfo=UTC),  # type: ignore[union-attr]
+            row["email"].loaded_at,  # type: ignore[union-attr]
+        )
+    )
+    return rows
+
+
+def _resolved_message_ids(database) -> set[str]:
+    with database.session_factory() as session:
+        return set(
+            session.scalars(
+                select(ProcessingStateRecord.gmail_message_id).where(
+                    ProcessingStateRecord.resolved.is_(True)
+                )
+            ).all()
+        )
 
 
 def _reply_defaults(message: EmailMessage, database) -> dict[str, str]:

@@ -105,10 +105,14 @@ def fetch_processable_messages(
             rule_snapshot=decision["rule_snapshot"],
         )
         if decision["action"] == FILTER_ACTION_PRECLASSIFY:
-            database.apply_preclassified_analysis(
-                message.gmail_message_id,
-                decision["preset_analysis"],
-            )
+            preset_priority = decision["preset_analysis"].get("priority", "")
+            if preset_priority in {"high", "medium"}:
+                processable_messages.append(message)
+            else:
+                database.apply_preclassified_analysis(
+                    message.gmail_message_id,
+                    decision["preset_analysis"],
+                )
         elif decision["action"] == FILTER_ACTION_ALWAYS_PROCESS:
             processable_messages.append(message)
 
@@ -142,14 +146,34 @@ def analyze_saved_messages(
             additional_instructions=instructions,
         )
         for message in group:
+            fixed_priority = _fixed_preclassified_priority(database, message.gmail_message_id)
+            message_analysis = (
+                {**analysis, "priority": fixed_priority}
+                if fixed_priority is not None
+                else analysis
+            )
             database.save_analysis(
                 message.gmail_message_id,
-                analysis,
+                message_analysis,
                 settings.llm_model,
             )
         analyzed_count += len(group)
     _notify(progress, 85, "analyze", f"{analyzed_count} 件の解析が完了しました")
     return analyzed_count
+
+
+def _fixed_preclassified_priority(
+    database: Database,
+    gmail_message_id: str,
+) -> str | None:
+    decision = database.get_saved_filter_decision(gmail_message_id)
+    if not decision or decision.get("action") != FILTER_ACTION_PRECLASSIFY:
+        return None
+    snapshot = decision.get("rule_snapshot") or {}
+    preset_priority = str(snapshot.get("preset_priority") or "")
+    if preset_priority in {"high", "medium"}:
+        return preset_priority
+    return None
 
 
 def _apply_starred_priority(

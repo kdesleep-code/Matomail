@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>追加指示の編集 - Matomail</title>
+    <style>
+      body { margin: 0; background: #f6f7f9; color: #17202a; font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif; }
+      main { width: min(900px, calc(100vw - 32px)); margin: 32px auto; display: grid; gap: 16px; }
+      .panel { border: 1px solid #d9dee5; border-radius: 8px; background: white; padding: 22px; }
+      h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+      form { display: grid; gap: 14px; }
+      label { display: grid; gap: 6px; font-weight: 700; }
+      textarea { width: 100%; min-height: 280px; box-sizing: border-box; border: 1px solid #d9dee5; border-radius: 6px; font: inherit; padding: 10px; resize: vertical; }
+      .hint { color: #64707d; font-size: 13px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+      button, a { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; padding: 0 14px; font: inherit; font-weight: 700; text-decoration: none; }
+      button { border: 0; background: #176b87; color: white; cursor: pointer; }
+      a { border: 1px solid #d9dee5; color: #176b87; background: white; }
+      .error { border-radius: 8px; padding: 12px 14px; background: #fff1f0; color: #b42318; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>{{ label or "追加指示の編集" }}</h1>
+      </section>
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
+      {% if label %}
+        <section class="panel">
+          <form method="post" action="/generation-instructions/{{ kind }}/edit">
+            <label>
+              LLMへの追加指示
+              <textarea name="instruction">{{ instruction }}</textarea>
+            </label>
+            <div class="hint">ここに書いた内容は、この種類の文面生成を行うときだけプロンプトへ追加されます。</div>
+            <div class="actions">
+              <button type="submit">保存</button>
+              <a href="/generation-instructions">一覧に戻る</a>
+            </div>
+          </form>
+        </section>
+      {% else %}
+        <section class="panel">
+          <div class="actions"><a href="/generation-instructions">一覧に戻る</a></div>
+        </section>
+      {% endif %}
+    </main>
+  </body>
+</html>

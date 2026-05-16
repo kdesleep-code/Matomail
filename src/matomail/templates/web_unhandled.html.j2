@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>未対応メール一覧 - Matomail</title>
+    <style>
+      body { margin: 0; background: #f6f7f9; color: #17202a; font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif; line-height: 1.55; }
+      main { width: min(1040px, calc(100vw - 32px)); margin: 32px auto; display: grid; gap: 16px; }
+      .panel, .mail { border: 1px solid #d9dee5; border-radius: 8px; background: white; padding: 18px; }
+      .mail { cursor: pointer; }
+      .mail:hover { border-color: #176b87; }
+      h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+      a { color: #176b87; font-weight: 700; }
+      .action { min-height: 38px; display: inline-flex; align-items: center; border: 1px solid #d9dee5; border-radius: 6px; padding: 0 12px; background: white; text-decoration: none; color: #176b87; font: inherit; font-weight: 700; cursor: pointer; }
+      .load-form { margin: 0; display: inline-flex; }
+      .list { display: grid; gap: 10px; }
+      .subject { font-size: 17px; font-weight: 700; color: #176b87; }
+      .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: #64707d; font-size: 14px; margin-top: 6px; }
+      .snippet { margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .badge { display: inline-flex; min-width: 72px; justify-content: center; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 800; }
+      .priority-high { color: #7a1f12; background: #ffe8df; border: 1px solid #d08b78; }
+      .priority-medium { color: #6f4d00; background: #fff4cd; border: 1px solid #d2b04d; }
+      .header-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>未対応メール一覧</h1>
+        <div class="meta">Priority が High または Middle の未対応メールを、優先度が高い順、同じ優先度では古い順に表示しています。</div>
+        <div class="actions">
+          <form class="load-form" method="post" action="/runs">
+            <button class="action" type="submit">本日のメールを読み込む</button>
+          </form>
+          <a class="action" href="/compose">新規メール作成</a>
+          <a class="action" href="/reports/index.html">メール一覧に戻る</a>
+        </div>
+      </section>
+      <section class="list">
+        {% for row in messages %}
+          {% set email = row.email %}
+          <article class="mail" data-href="{{ row.detail_href }}">
+            <div class="header-row">
+              <span class="subject">{{ email.subject or "(件名なし)" }}</span>
+              <span class="badge priority-{{ email.analysis.priority }}">{{ email.analysis.priority }}</span>
+            </div>
+            <div class="meta">
+              <span>From: {{ email.sender }}</span>
+              <span>To: {{ email.recipients|join(", ") }}</span>
+              <span>受信: {{ email.received_at_display }}</span>
+              <span>読込: {{ email.loaded_at_display }}</span>
+            </div>
+            <div class="snippet">{{ email.snippet or email.body[:240] }}</div>
+          </article>
+        {% else %}
+          <article class="mail">未対応の High / Middle メールはありません。</article>
+        {% endfor %}
+      </section>
+    </main>
+    <script>
+      document.querySelectorAll(".mail[data-href]").forEach((card) => {
+        card.addEventListener("click", (event) => {
+          if (event.target.closest("a, button")) return;
+          window.location.href = card.dataset.href;
+        });
+      });
+    </script>
+  </body>
+</html>

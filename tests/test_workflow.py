@@ -155,6 +155,71 @@ def test_lower_number_llm_instruction_rule_keeps_mail_processable(tmp_path, monk
     assert processable_messages == [message]
 
 
+def test_high_preclassify_rule_still_runs_llm_but_keeps_fixed_priority(tmp_path, monkeypatch) -> None:
+    settings = _settings(tmp_path)
+    rules_database = RulesDatabase(settings.rules_db_path)
+    rules_database.create_all()
+    rules_database.add_filter_rule(
+        name="fixed high",
+        action=FILTER_ACTION_PRECLASSIFY,
+        preset_priority="high",
+        has_words="2026-05-15",
+    )
+    message = _message()
+    monkeypatch.setattr(
+        workflow.GmailClient,
+        "from_oauth",
+        lambda _settings, scopes=None: _FakeGmailClient([message]),
+    )
+    fake_client = _FakeLLMClient()
+    monkeypatch.setattr(workflow.LLMClient, "from_settings", lambda _settings: fake_client)
+
+    processable_messages, fetched_count = workflow.fetch_processable_messages(settings)
+    analyzed_count = workflow.analyze_saved_messages(settings)
+
+    database = Database(settings.db_path)
+    assert fetched_count == 1
+    assert processable_messages == [message]
+    assert analyzed_count == 1
+    assert len(fake_client.prompts) == 1
+    with database.session_factory() as session:
+        analysis = session.query(EmailAnalysisRecord).one()
+    assert analysis.priority == "high"
+    assert analysis.category == "card"
+
+
+def test_low_preclassify_rule_still_skips_llm(tmp_path, monkeypatch) -> None:
+    settings = _settings(tmp_path)
+    rules_database = RulesDatabase(settings.rules_db_path)
+    rules_database.create_all()
+    rules_database.add_filter_rule(
+        name="fixed low",
+        action=FILTER_ACTION_PRECLASSIFY,
+        preset_priority="low",
+        has_words="2026-05-15",
+    )
+    message = _message()
+    monkeypatch.setattr(
+        workflow.GmailClient,
+        "from_oauth",
+        lambda _settings, scopes=None: _FakeGmailClient([message]),
+    )
+    fake_client = _FakeLLMClient()
+    monkeypatch.setattr(workflow.LLMClient, "from_settings", lambda _settings: fake_client)
+
+    processable_messages, fetched_count = workflow.fetch_processable_messages(settings)
+    analyzed_count = workflow.analyze_saved_messages(settings)
+
+    database = Database(settings.db_path)
+    assert fetched_count == 1
+    assert processable_messages == []
+    assert analyzed_count == 0
+    assert fake_client.prompts == []
+    with database.session_factory() as session:
+        analysis = session.query(EmailAnalysisRecord).one()
+    assert analysis.priority == "low"
+
+
 def test_fetch_saves_sent_messages_without_making_them_processable(tmp_path, monkeypatch) -> None:
     settings = _settings(tmp_path)
     received = _message("received")

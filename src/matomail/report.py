@@ -17,7 +17,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import select
 
 from .models import AttachmentInfo
-from .database import Database, EmailAnalysisRecord, EmailDigestRecord, EmailRecord, FilterDecisionRecord
+from .database import CalendarEventRecord, Database, EmailAnalysisRecord, EmailDigestRecord, EmailRecord, FilterDecisionRecord, ProcessingStateRecord
 from .database import FILTER_ACTION_IGNORE, FILTER_ACTION_SKIP_ANALYSIS
 
 
@@ -40,6 +40,20 @@ class ReportDigest:
 
 
 @dataclass(frozen=True)
+class ReportCalendarEvent:
+    id: int
+    title: str
+    start_time: datetime | None
+    end_time: datetime | None
+    start_display: str
+    end_display: str
+    timezone: str
+    location: str
+    calendar_event_id: str
+    status: str
+
+
+@dataclass(frozen=True)
 class ReportEmail:
     gmail_message_id: str
     gmail_thread_id: str
@@ -58,10 +72,17 @@ class ReportEmail:
     has_attachments: bool
     attachments: tuple[AttachmentInfo, ...]
     is_sent: bool
+    is_opened: bool
+    is_resolved: bool
+    completed_at: datetime | None
+    completed_date: str
     sender_color: str
     message_href: str
+    calendar_candidates_hidden: bool
+    filter_action: str
     analysis: ReportAnalysis
     digest: ReportDigest | None
+    calendar_events: tuple[ReportCalendarEvent, ...]
 
 
 @dataclass(frozen=True)
@@ -94,6 +115,30 @@ class ReportThread:
             if not message.is_sent and message.report_date == self.report_date:
                 return message
         return self.messages[0]
+
+    @property
+    def latest_message(self) -> ReportEmail:
+        return self.messages[0]
+
+    @property
+    def is_read(self) -> bool:
+        return self.latest_message.is_opened
+
+    @property
+    def status_class(self) -> str:
+        return "is-read" if self.is_read else "is-unread"
+
+    @property
+    def filter_action(self) -> str:
+        return self.primary_message.filter_action
+
+    @property
+    def filter_label(self) -> str:
+        if self.filter_action == FILTER_ACTION_IGNORE:
+            return "ignore"
+        if self.filter_action == FILTER_ACTION_SKIP_ANALYSIS:
+            return "skip"
+        return ""
 
     @property
     def attachment_summary(self) -> str:
@@ -141,8 +186,17 @@ class ReportGenerator:
 
     def generate_all(self, open_browser: bool = False) -> Path | None:
         emails = self._list_report_emails()
-        list_emails = [email for email in emails if not email.is_sent]
+        skipped_emails = _skipped_list_emails(emails)
+        non_skipped_emails = [email for email in emails if not _is_skipped_email(email)]
+        list_emails = _active_list_emails(non_skipped_emails)
+        completed_emails = _completed_list_emails(non_skipped_emails)
         grouped = _group_by_date(list_emails)
+        completed_grouped = _group_by_completed_date(completed_emails)
+        skipped_grouped = _group_by_date(skipped_emails)
+        for date_key in completed_grouped:
+            grouped.setdefault(date_key, [])
+        for date_key in skipped_grouped:
+            grouped.setdefault(date_key, [])
         if not grouped:
             return None
 
@@ -151,6 +205,8 @@ class ReportGenerator:
             self._write_daily_report(
                 date_key=date_key,
                 emails=grouped[date_key],
+                completed_emails=completed_grouped.get(date_key, []),
+                skipped_emails=skipped_grouped.get(date_key, []),
                 all_emails=emails,
                 available_dates=dates,
                 previous_date=dates[index - 1] if index > 0 else None,
@@ -168,6 +224,8 @@ class ReportGenerator:
         *,
         date_key: str,
         emails: list[ReportEmail],
+        completed_emails: list[ReportEmail],
+        skipped_emails: list[ReportEmail],
         all_emails: list[ReportEmail],
         available_dates: list[str],
         previous_date: str | None,
@@ -176,7 +234,11 @@ class ReportGenerator:
         daily_dir = self.report_dir / date_key
         messages_dir = daily_dir / "messages"
         messages_dir.mkdir(parents=True, exist_ok=True)
+        for stale_message_path in messages_dir.glob("*.html"):
+            stale_message_path.unlink()
         threads = _build_report_threads(emails, all_emails, date_key)
+        completed_threads = _build_report_threads(completed_emails, all_emails, date_key)
+        skipped_threads = _build_report_threads(skipped_emails, all_emails, date_key)
 
         template = self.environment.get_template("report.html.j2")
         report_day = date.fromisoformat(date_key)
@@ -184,8 +246,21 @@ class ReportGenerator:
             "generated_at": datetime.now(self.timezone).strftime("%Y-%m-%d %H:%M"),
             "report_date": date_key,
             "emails": threads,
+            "active_emails": threads,
+            "completed_emails": completed_threads,
+            "skipped_emails": skipped_threads,
             "email_count": sum(thread.current_message_count for thread in threads),
             "thread_count": len(threads),
+            "active_email_count": sum(thread.current_message_count for thread in threads),
+            "active_thread_count": len(threads),
+            "completed_email_count": sum(
+                thread.current_message_count for thread in completed_threads
+            ),
+            "completed_thread_count": len(completed_threads),
+            "skipped_email_count": sum(
+                thread.current_message_count for thread in skipped_threads
+            ),
+            "skipped_thread_count": len(skipped_threads),
             "previous_href": f"../{previous_date}/index.html" if previous_date else "",
             "next_href": f"../{next_date}/index.html" if next_date else "",
             "calendar_weeks": _build_calendar(report_day, available_dates),
@@ -196,10 +271,11 @@ class ReportGenerator:
         index_path = daily_dir / "index.html"
         index_path.write_text(template.render(context), encoding="utf-8")
 
-        for index, thread in enumerate(threads):
+        detail_threads = _unique_threads([*threads, *completed_threads, *skipped_threads])
+        for index, thread in enumerate(detail_threads):
             message_path = messages_dir / Path(thread.message_href).name
-            previous_thread = threads[index - 1] if index > 0 else None
-            next_thread = threads[index + 1] if index < len(threads) - 1 else None
+            previous_thread = detail_threads[index - 1] if index > 0 else None
+            next_thread = detail_threads[index + 1] if index < len(detail_threads) - 1 else None
             message_context = {
                 **context,
                 "page": "message",
@@ -254,11 +330,6 @@ class ReportGenerator:
                     .order_by(FilterDecisionRecord.decided_at.desc(), FilterDecisionRecord.id.desc())
                     .limit(1)
                 )
-                if decision and decision.action in {
-                    FILTER_ACTION_IGNORE,
-                    FILTER_ACTION_SKIP_ANALYSIS,
-                }:
-                    continue
                 analysis = session.scalar(
                     select(EmailAnalysisRecord)
                     .where(EmailAnalysisRecord.email_id == record.id)
@@ -277,7 +348,31 @@ class ReportGenerator:
                     )
                     .limit(1)
                 )
-                emails.append(self._record_to_report_email(record, analysis, digest, is_sent))
+                state = session.scalar(
+                    select(ProcessingStateRecord).where(
+                        ProcessingStateRecord.gmail_message_id == record.gmail_message_id
+                    )
+                )
+                calendar_events = session.scalars(
+                    select(CalendarEventRecord)
+                    .where(CalendarEventRecord.email_id == record.id)
+                    .where(CalendarEventRecord.status == "registered")
+                    .order_by(CalendarEventRecord.created_at.desc(), CalendarEventRecord.id.desc())
+                ).all()
+                emails.append(
+                    self._record_to_report_email(
+                        record,
+                        analysis,
+                        digest,
+                        calendar_events,
+                        is_sent,
+                        bool(state.web_opened) if state else False,
+                        bool(state.resolved) if state else False,
+                        state.resolved_at if state else None,
+                        bool(state.calendar_candidates_hidden) if state else False,
+                        decision.action if decision else "",
+                    )
+                )
             return _merge_duplicate_report_emails(emails)
 
     def _record_to_report_email(
@@ -285,10 +380,18 @@ class ReportGenerator:
         record: EmailRecord,
         analysis: EmailAnalysisRecord | None,
         digest: EmailDigestRecord | None = None,
+        calendar_events: list[CalendarEventRecord] | None = None,
         is_sent: bool = False,
+        is_opened: bool = False,
+        is_resolved: bool = False,
+        resolved_at: datetime | None = None,
+        calendar_candidates_hidden: bool = False,
+        filter_action: str = "",
     ) -> ReportEmail:
         loaded_at = _to_timezone(record.created_at, self.timezone)
         received_at = _to_timezone(record.received_at, self.timezone)
+        resolved_at_local = _to_timezone(resolved_at, self.timezone)
+        completed_at = (received_at or loaded_at) if is_sent else resolved_at_local
         report_date = loaded_at.date().isoformat()
         recipients = tuple(json.loads(record.recipients or "[]"))
         cc = tuple(json.loads(record.cc or "[]"))
@@ -321,8 +424,14 @@ class ReportGenerator:
                 for item in json.loads(record.attachment_metadata or "[]")
             ),
             is_sent=is_sent,
+            is_opened=is_opened,
+            is_resolved=is_resolved,
+            completed_at=completed_at,
+            completed_date=completed_at.date().isoformat() if completed_at else "",
             sender_color="#ffffff" if is_sent else _sender_background_color(record.sender),
             message_href=f"messages/{_safe_filename(record.gmail_message_id)}.html",
+            calendar_candidates_hidden=calendar_candidates_hidden,
+            filter_action=filter_action,
             analysis=ReportAnalysis(
                 priority=priority,
                 summary_ja=analysis.summary_ja if analysis else "",
@@ -345,6 +454,10 @@ class ReportGenerator:
                 )
                 if digest
                 else None
+            ),
+            calendar_events=tuple(
+                _calendar_event_to_report_event(event, self.timezone)
+                for event in (calendar_events or [])
             ),
         )
 
@@ -369,11 +482,99 @@ def _to_timezone(
     return value.astimezone(timezone)
 
 
+def _calendar_event_to_report_event(
+    event: CalendarEventRecord,
+    timezone: ZoneInfo | fixed_timezone,
+) -> ReportCalendarEvent:
+    start_time = _to_timezone(event.start_time, timezone)
+    end_time = _to_timezone(event.end_time, timezone)
+    return ReportCalendarEvent(
+        id=event.id,
+        title=event.title,
+        start_time=start_time,
+        end_time=end_time,
+        start_display=start_time.strftime("%Y-%m-%d %H:%M") if start_time else "",
+        end_display=end_time.strftime("%Y-%m-%d %H:%M") if end_time else "",
+        timezone=event.timezone,
+        location=event.location,
+        calendar_event_id=event.calendar_event_id,
+        status=event.status,
+    )
+
+
 def _group_by_date(emails: list[ReportEmail]) -> dict[str, list[ReportEmail]]:
     grouped: dict[str, list[ReportEmail]] = {}
     for email in emails:
         grouped.setdefault(email.report_date, []).append(email)
     return grouped
+
+
+def _group_by_completed_date(emails: list[ReportEmail]) -> dict[str, list[ReportEmail]]:
+    grouped: dict[str, list[ReportEmail]] = {}
+    for email in emails:
+        if email.completed_date:
+            grouped.setdefault(email.completed_date, []).append(email)
+    return grouped
+
+
+def _active_list_emails(emails: list[ReportEmail]) -> list[ReportEmail]:
+    groups: dict[str, list[ReportEmail]] = {}
+    for email in emails:
+        key = email.gmail_thread_id or email.gmail_message_id
+        groups.setdefault(key, []).append(email)
+
+    completed_keys = set()
+    for key, group in groups.items():
+        latest = _latest_email(group)
+        if latest.is_sent or latest.is_resolved:
+            completed_keys.add(key)
+
+    return [
+        email
+        for email in emails
+        if not email.is_sent
+        and (email.gmail_thread_id or email.gmail_message_id) not in completed_keys
+    ]
+
+
+def _completed_list_emails(emails: list[ReportEmail]) -> list[ReportEmail]:
+    groups: dict[str, list[ReportEmail]] = {}
+    for email in emails:
+        key = email.gmail_thread_id or email.gmail_message_id
+        groups.setdefault(key, []).append(email)
+
+    completed: list[ReportEmail] = []
+    for group in groups.values():
+        latest = _latest_email(group)
+        if latest.is_sent or latest.is_resolved:
+            completed.append(latest)
+    return completed
+
+
+def _skipped_list_emails(emails: list[ReportEmail]) -> list[ReportEmail]:
+    return [
+        email
+        for email in emails
+        if _is_skipped_email(email) and not email.is_sent
+    ]
+
+
+def _is_skipped_email(email: ReportEmail) -> bool:
+    return email.filter_action in {
+        FILTER_ACTION_IGNORE,
+        FILTER_ACTION_SKIP_ANALYSIS,
+    }
+
+
+def _unique_threads(threads: list[ReportThread]) -> list[ReportThread]:
+    unique: list[ReportThread] = []
+    seen: set[str] = set()
+    for thread in threads:
+        if thread.key in seen:
+            continue
+        seen.add(thread.key)
+        unique.append(thread)
+    return unique
 
 
 def _safe_filename(value: str) -> str:
@@ -432,7 +633,7 @@ def _thread_from_emails(
     report_date: str,
 ) -> ReportThread:
     current_messages = sorted(
-        [email for email in detail_emails if email.report_date == report_date],
+        current_emails,
         key=lambda email: (
             email.received_at or datetime.min.replace(tzinfo=UTC),
             email.loaded_at,
@@ -499,6 +700,16 @@ def _thread_from_emails(
         analysis=highest_analysis,
         messages=tuple(messages),
         current_message_count=len(current_messages),
+    )
+
+
+def _latest_email(emails: list[ReportEmail]) -> ReportEmail:
+    return max(
+        emails,
+        key=lambda email: (
+            email.received_at or datetime.min.replace(tzinfo=UTC),
+            email.loaded_at,
+        ),
     )
 
 

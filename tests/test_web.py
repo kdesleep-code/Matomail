@@ -19,6 +19,7 @@ def test_home_page_has_load_button() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
+    assert "未対応メール一覧" in response.text
     assert "本日のメールを読み込む" in response.text
     assert 'action="/runs"' in response.text
 
@@ -653,6 +654,7 @@ def test_reply_draft_endpoint_generates_draft(tmp_path, monkeypatch) -> None:
     database = Database(db_path)
     database.create_all()
     database.save_email(_message())
+    database.set_app_setting("llm_instruction.reply", "Always write a concise reply.")
 
     class _FakeLLMClient:
         prompts: list[str] = []
@@ -677,6 +679,7 @@ def test_reply_draft_endpoint_generates_draft(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["draft"] == "承知しました。確認して返信いたします。"
     assert "来週確認すると伝える" in fake_client.prompts[0]
+    assert "Always write a concise reply." in fake_client.prompts[0]
     assert "Meeting notes" in fake_client.prompts[0]
     assert "body text for rule creation" in fake_client.prompts[0]
 
@@ -1002,7 +1005,112 @@ def test_send_reply_reauths_once_when_scope_is_insufficient(
     assert force_consent_values == [False, True]
 
 
-def test_singletons_page_lists_only_single_sent_threads(tmp_path, monkeypatch) -> None:
+def test_send_new_message_redirects_to_latest_report(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "matomail.sqlite3"
+    rules_db_path = tmp_path / "matomail_rules.sqlite3"
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    (report_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setattr(
+        web,
+        "settings",
+        SimpleNamespace(
+            db_path=db_path,
+            rules_db_path=rules_db_path,
+            db_max_size_mb=512,
+            db_backup_dir=tmp_path / "backups",
+            store_email_body=True,
+            report_dir=report_dir,
+            timezone="Asia/Tokyo",
+            account_emails=(),
+            google_token_file=tmp_path / "token.json",
+            google_client_secrets_file=tmp_path / "credentials.json",
+            google_oauth_port=8080,
+        ),
+    )
+    sent_calls = []
+
+    class _FakeGmailClient:
+        def send_message(self, **kwargs):
+            sent_calls.append(kwargs)
+            return {"id": "new-sent"}
+
+    monkeypatch.setattr(
+        web.GmailClient,
+        "from_oauth",
+        lambda _settings, scopes=None: _FakeGmailClient(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/compose",
+        data={
+            "to": "receiver@example.com",
+            "cc": "",
+            "bcc": "",
+            "subject": "Hello",
+            "body": "New message body.",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/reports/index.html"
+    assert sent_calls == [
+        {
+            "to": ("receiver@example.com",),
+            "cc": (),
+            "bcc": (),
+            "subject": "Hello",
+            "body": "New message body.",
+        }
+    ]
+
+
+def test_generation_instruction_pages_edit_compose_and_reply_settings(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "matomail.sqlite3"
+    rules_db_path = tmp_path / "matomail_rules.sqlite3"
+    monkeypatch.setattr(
+        web,
+        "settings",
+        SimpleNamespace(
+            db_path=db_path,
+            rules_db_path=rules_db_path,
+            db_max_size_mb=512,
+            db_backup_dir=tmp_path / "backups",
+            store_email_body=True,
+            report_dir=tmp_path / "reports",
+            timezone="Asia/Tokyo",
+            account_emails=(),
+        ),
+    )
+    database = Database(db_path)
+    database.create_all()
+    database.set_app_setting("llm_instruction.compose", "Use short paragraphs.")
+    client = TestClient(app)
+
+    response = client.get("/generation-instructions")
+
+    assert response.status_code == 200
+    assert "新規メールの文面を生成するとき" in response.text
+    assert "返信メールの文面を生成するとき" in response.text
+    assert "Use short paragraphs." in response.text
+    assert "/generation-instructions/reply/edit" in response.text
+
+    response = client.post(
+        "/generation-instructions/reply/edit",
+        data={"instruction": "Use polite Japanese."},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/generation-instructions"
+    assert database.get_app_setting("llm_instruction.reply") == "Use polite Japanese."
+
+
+def test_unhandled_page_lists_active_high_or_medium_threads(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "matomail.sqlite3"
     rules_db_path = tmp_path / "matomail_rules.sqlite3"
     monkeypatch.setattr(
@@ -1060,19 +1168,262 @@ def test_singletons_page_lists_only_single_sent_threads(tmp_path, monkeypatch) -
         attachments=(),
     )
     single_received = _message()
+    resolved_received = EmailMessage(
+        gmail_message_id="resolved-received",
+        gmail_thread_id="thread-resolved",
+        sender="other@example.com",
+        recipients=("me@example.com",),
+        cc=(),
+        subject="Resolved received",
+        received_at=datetime(2026, 5, 15, 12, 20, tzinfo=UTC),
+        snippet="resolved snippet",
+        body="resolved body",
+        attachments=(),
+    )
     database.save_email(single_sent)
     database.save_email(paired_sent)
     database.save_email(paired_received)
     database.save_email(single_received)
+    database.save_email(resolved_received)
+    for message in [single_sent, paired_sent, paired_received, single_received, resolved_received]:
+        database.save_analysis(
+            message.gmail_message_id,
+            {
+                "summary_ja": "",
+                "category": "test",
+                "priority": "medium",
+                "requires_reply": False,
+                "suggested_action_ja": "",
+                "deadline_candidates": [],
+                "meeting_candidates": [],
+                "reply_draft_ja": "",
+                "confidence": 1.0,
+            },
+            llm_model="test",
+        )
+    database.set_resolved("resolved-received", True)
     client = TestClient(app)
 
-    response = client.get("/singletons")
+    response = client.get("/unhandled")
 
     assert response.status_code == 200
-    assert "シリーズにない送信メール" in response.text
-    assert "Single sent" in response.text
-    assert "Paired sent" not in response.text
-    assert "Meeting notes" not in response.text
+    assert "未対応メール一覧" in response.text
+    assert "Re: Paired sent" in response.text
+    assert "Meeting notes" in response.text
+    assert "Single sent" not in response.text
+    assert "Resolved received" not in response.text
+
+    redirect = client.get("/singletons", follow_redirects=False)
+    assert redirect.status_code == 303
+    assert redirect.headers["location"] == "/unhandled"
+
+    completed_redirect = client.get("/completed", follow_redirects=False)
+    assert completed_redirect.status_code == 303
+
+
+def test_message_state_endpoints_mark_opened_and_resolved(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "matomail.sqlite3"
+    rules_db_path = tmp_path / "matomail_rules.sqlite3"
+    monkeypatch.setattr(
+        web,
+        "settings",
+        SimpleNamespace(
+            db_path=db_path,
+            rules_db_path=rules_db_path,
+            db_max_size_mb=512,
+            db_backup_dir=tmp_path / "backups",
+            store_email_body=True,
+            report_dir=tmp_path / "reports",
+            timezone="Asia/Tokyo",
+            account_emails=(),
+        ),
+    )
+    database = Database(db_path)
+    database.create_all()
+    database.save_email(_message())
+    monkeypatch.setattr(web, "generate_report", lambda _settings, open_browser=False: None)
+    client = TestClient(app)
+
+    opened = client.post("/messages/msg-1/opened")
+    resolved = client.post("/messages/msg-1/resolved", json={"resolved": True})
+
+    assert opened.status_code == 200
+    assert opened.json() == {"ok": True}
+    assert resolved.status_code == 200
+    assert resolved.json() == {"ok": True}
+    with database.session_factory() as session:
+        state = session.scalar(
+            select(web.ProcessingStateRecord).where(
+                web.ProcessingStateRecord.gmail_message_id == "msg-1"
+            )
+        )
+    assert state is not None
+    assert state.web_opened is True
+    assert state.resolved is True
+
+
+def test_calendar_candidate_cancel_preserves_cached_candidates(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "matomail.sqlite3"
+    rules_db_path = tmp_path / "matomail_rules.sqlite3"
+    monkeypatch.setattr(
+        web,
+        "settings",
+        SimpleNamespace(
+            db_path=db_path,
+            rules_db_path=rules_db_path,
+            db_max_size_mb=512,
+            db_backup_dir=tmp_path / "backups",
+            store_email_body=True,
+            report_dir=tmp_path / "reports",
+            timezone="Asia/Tokyo",
+            account_emails=(),
+        ),
+    )
+    database = Database(db_path)
+    database.create_all()
+    database.save_email(_message())
+    candidates = [
+        {
+            "title": "Meeting",
+            "start_time": "2026-05-20 12:00",
+            "end_time": "2026-05-20 13:00",
+            "timezone": "Asia/Tokyo",
+        }
+    ]
+    database.set_meeting_candidates("msg-1", candidates)
+    monkeypatch.setattr(web, "generate_report", lambda _settings, open_browser=False: None)
+
+    client = TestClient(app)
+    clear = client.post(
+        "/calendar-candidates/clear",
+        data={"message_id": "msg-1", "return_url": "/reports/2026-05-16/messages/msg-1.html"},
+        follow_redirects=False,
+    )
+    assert clear.status_code == 303
+
+    assert database.get_meeting_candidates("msg-1") == candidates
+    with database.session_factory() as session:
+        state = session.scalar(
+            select(web.ProcessingStateRecord).where(
+                web.ProcessingStateRecord.gmail_message_id == "msg-1"
+            )
+        )
+    assert state is not None
+    assert state.calendar_candidates_hidden is True
+
+
+def test_calendar_candidate_extract_uses_cache_without_llm(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "matomail.sqlite3"
+    rules_db_path = tmp_path / "matomail_rules.sqlite3"
+    monkeypatch.setattr(
+        web,
+        "settings",
+        SimpleNamespace(
+            db_path=db_path,
+            rules_db_path=rules_db_path,
+            db_max_size_mb=512,
+            db_backup_dir=tmp_path / "backups",
+            store_email_body=True,
+            report_dir=tmp_path / "reports",
+            timezone="Asia/Tokyo",
+            account_emails=(),
+        ),
+    )
+    database = Database(db_path)
+    database.create_all()
+    database.save_email(_message())
+    database.set_meeting_candidates(
+        "msg-1",
+        [{"title": "Cached meeting", "start_time": "2026-05-20 12:00"}],
+        hidden=True,
+    )
+    monkeypatch.setattr(web, "generate_report", lambda _settings, open_browser=False: None)
+
+    class FailingLLMClient:
+        @classmethod
+        def from_settings(cls, _settings):
+            raise AssertionError("LLM should not be called for cached candidates")
+
+    monkeypatch.setattr(web, "LLMClient", FailingLLMClient)
+    client = TestClient(app)
+
+    response = client.post(
+        "/calendar-candidates/extract",
+        data={"message_id": "msg-1", "return_url": "/reports/2026-05-16/messages/msg-1.html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    with database.session_factory() as session:
+        state = session.scalar(
+            select(web.ProcessingStateRecord).where(
+                web.ProcessingStateRecord.gmail_message_id == "msg-1"
+            )
+        )
+    assert state is not None
+    assert state.calendar_candidates_hidden is False
+
+
+def test_calendar_event_creation_overwrites_cached_candidate_with_submitted_values(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "matomail.sqlite3"
+    rules_db_path = tmp_path / "matomail_rules.sqlite3"
+    monkeypatch.setattr(
+        web,
+        "settings",
+        SimpleNamespace(
+            db_path=db_path,
+            rules_db_path=rules_db_path,
+            db_max_size_mb=512,
+            db_backup_dir=tmp_path / "backups",
+            store_email_body=True,
+            report_dir=tmp_path / "reports",
+            timezone="Asia/Tokyo",
+            account_emails=(),
+        ),
+    )
+    database = Database(db_path)
+    database.create_all()
+    database.save_email(_message())
+    database.set_meeting_candidates(
+        "msg-1",
+        [{"title": "Old title", "start_time": "2026-05-20 12:00"}],
+    )
+    monkeypatch.setattr(web, "generate_report", lambda _settings, open_browser=False: None)
+    monkeypatch.setattr(
+        web,
+        "_create_calendar_event_via_google",
+        lambda **_kwargs: {"id": "calendar-event-1"},
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/calendar-events",
+        data={
+            "message_id": "msg-1",
+            "return_url": "/reports/2026-05-16/messages/msg-1.html",
+            "title": "Edited meeting",
+            "start_time": "2026-05-21 10:00",
+            "end_time": "2026-05-21 11:00",
+            "timezone": "Asia/Tokyo",
+            "location": "Teams",
+            "attendees": "reader@example.com, sender@example.com",
+            "description": "Edited description",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    cached = database.get_meeting_candidates("msg-1")
+    assert cached[0]["title"] == "Edited meeting"
+    assert cached[0]["start_time"] == "2026-05-21 10:00"
+    assert cached[0]["end_time"] == "2026-05-21 11:00"
+    assert cached[0]["location"] == "Teams"
+    assert cached[0]["attendees"] == ["reader@example.com", "sender@example.com"]
+    assert "Edited description" in cached[0]["description"]
+    assert "https://mail.google.com/mail/u/0/#all/thread-1" in cached[0]["description"]
 
 
 def test_schedule_reply_reports_gmail_api_limitation(tmp_path, monkeypatch) -> None:

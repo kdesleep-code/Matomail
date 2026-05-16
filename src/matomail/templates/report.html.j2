@@ -82,6 +82,18 @@
         padding: 0 12px;
       }
 
+      button.home-link {
+        font-family: inherit;
+        font-size: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .load-form {
+        margin: 0;
+        display: inline-flex;
+      }
+
       .home-link {
         min-height: 34px;
         font-size: 14px;
@@ -103,6 +115,36 @@
         margin-bottom: 12px;
         color: var(--muted);
         font-size: 13px;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 8px 0 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .tab-button {
+        min-height: 42px;
+        border: 1px solid var(--line);
+        border-bottom: 0;
+        border-radius: 8px 8px 0 0;
+        background: #f5f7fa;
+        color: var(--muted);
+        font: inherit;
+        font-weight: 700;
+        padding: 8px 14px;
+        cursor: pointer;
+      }
+
+      .tab-button.is-active {
+        background: var(--surface);
+        color: var(--accent);
+      }
+
+      .tab-panel[hidden] {
+        display: none;
       }
 
       input,
@@ -130,6 +172,10 @@
         background: var(--surface);
       }
 
+      .mail-card.is-read {
+        background: #eef0f3;
+      }
+
       .mail-card:hover {
         border-color: var(--accent);
       }
@@ -154,6 +200,24 @@
         font-size: 13px;
       }
 
+      .meta-link {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 2px 10px;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        color: var(--accent);
+        background: #f4fbfd;
+        font-weight: 800;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+
+      .meta-link:hover {
+        background: #e7f5f9;
+      }
+
       .snippet {
         color: #303943;
         font-size: 14px;
@@ -163,6 +227,125 @@
         color: var(--muted);
         font-size: 13px;
         font-weight: 700;
+      }
+
+      .calendar-candidates {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfd;
+        padding: 14px;
+      }
+
+      .calendar-candidates h3 {
+        margin: 0 0 12px;
+        font-size: 16px;
+      }
+
+      .calendar-candidate {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .calendar-candidate + .calendar-candidate {
+        margin-top: 10px;
+      }
+
+      .calendar-candidate-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin: 8px 0 12px;
+      }
+
+      .calendar-candidate-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .calendar-candidate label {
+        display: grid;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .calendar-candidate input,
+      .calendar-candidate textarea {
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      .calendar-candidate textarea {
+        min-height: 72px;
+        resize: vertical;
+      }
+
+      .calendar-submit,
+      .calendar-cancel,
+      .calendar-overwrite {
+        justify-self: start;
+        min-height: 36px;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        background: var(--accent);
+        color: white;
+        font-weight: 800;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+
+      .calendar-extract {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 36px;
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--accent);
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .calendar-extract-form {
+        display: inline-flex;
+        margin: 0;
+      }
+
+      .calendar-extract-form .calendar-extract {
+        height: 100%;
+      }
+
+      .calendar-registered {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 12px;
+        color: #244b30;
+        font-weight: 400;
+      }
+
+      .calendar-cancel-form,
+      .calendar-overwrite-form {
+        margin: 0;
+      }
+
+      .calendar-cancel,
+      .calendar-overwrite {
+        min-height: 36px;
+        background: var(--surface);
+        color: var(--accent);
       }
 
       .badge {
@@ -196,6 +379,16 @@
       .priority-low {
         color: var(--low);
         background: #eef8f1;
+      }
+
+      .filter-skip {
+        color: #5f6f00;
+        background: #f7f8dc;
+      }
+
+      .filter-ignore {
+        color: #5f6872;
+        background: #eef0f3;
       }
 
       .calendar {
@@ -294,8 +487,6 @@
       .thread-message-header {
         display: grid;
         gap: 8px;
-        position: relative;
-        padding-right: 230px;
       }
 
       .thread-message-title-row {
@@ -313,15 +504,20 @@
       }
 
       .message-top-actions {
-        position: absolute;
-        top: 0;
-        right: 0;
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
+        justify-content: flex-start;
+        margin-bottom: 4px;
       }
 
       .reply-draft-toggle,
-      .reply-button {
+      .reply-button,
+      .resolved-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 36px;
         border: 1px solid var(--accent);
         border-radius: 8px;
         background: var(--surface);
@@ -332,12 +528,16 @@
         font-weight: 700;
         cursor: pointer;
         text-decoration: none;
+        white-space: nowrap;
       }
 
       .reply-draft-toggle:hover,
-      .reply-button:hover {
+      .reply-button:hover,
+      .resolved-toggle:hover {
         background: #eff6ff;
       }
+
+      .resolved-toggle { gap: 6px; }
 
       .reply-draft-panel {
         display: grid;
@@ -536,28 +736,86 @@
           height: 58px;
         }
 
-        .thread-message-header {
-          padding-right: 0;
-        }
-
         .reply-draft-toggle {
-          position: static;
-          width: 100%;
+          width: auto;
         }
 
         .message-top-actions {
-          position: static;
           width: 100%;
-          flex-direction: column;
         }
 
         .reply-button {
-          width: 100%;
+          width: auto;
         }
       }
     </style>
   </head>
   <body>
+    {% macro calendar_panel(email, report_date, thread) %}
+      {% if email.calendar_events %}
+        <section class="digest" aria-label="カレンダー登録済み">
+          <div class="digest-section">
+          <h2>カレンダー登録</h2>
+          {% for event in email.calendar_events %}
+            <div class="calendar-registered">
+              <span>{{ event.start_display }}{% if event.end_display %} - {{ event.end_display }}{% endif %} に「{{ event.title }}」を登録しました。</span>
+              {% if event.location %}<span>場所: {{ event.location }}</span>{% endif %}
+              <form class="calendar-cancel-form" method="post" action="/calendar-events/{{ event.id }}/cancel">
+                <input type="hidden" name="return_url" value="/reports/{{ report_date }}/{{ thread.message_href }}">
+                <button class="calendar-cancel" type="submit">予定を解除</button>
+              </form>
+            </div>
+          {% endfor %}
+          </div>
+        </section>
+      {% elif email.analysis.meeting_candidates and not email.calendar_candidates_hidden %}
+        <section class="calendar-candidates" aria-label="カレンダー候補">
+          <h3>カレンダー候補</h3>
+          {% for candidate in email.analysis.meeting_candidates %}
+            {% set candidate_form_id = "calendar-register-" ~ email.gmail_message_id ~ "-" ~ loop.index0 %}
+            <form id="{{ candidate_form_id }}" class="calendar-candidate" method="post" action="/calendar-events">
+              <input type="hidden" name="message_id" value="{{ email.gmail_message_id }}">
+              <input type="hidden" name="return_url" value="/reports/{{ report_date }}/{{ thread.message_href }}">
+              <div class="calendar-candidate-grid">
+                <label>
+                  タイトル
+                  <input name="title" value="{{ candidate.title or email.subject }}">
+                </label>
+                <label>
+                  場所
+                  <input name="location" value="{{ candidate.location or '' }}">
+                </label>
+                <label>
+                  開始
+                  <input name="start_time" value="{{ candidate.start_time or '' }}">
+                </label>
+                <label>
+                  終了
+                  <input name="end_time" value="{{ candidate.end_time or '' }}">
+                </label>
+                <label>
+                  タイムゾーン
+                  <input name="timezone" value="{{ candidate.timezone or 'Asia/Tokyo' }}">
+                </label>
+                <label>
+                  参加者
+                  <input name="attendees" value="{{ candidate.attendees|join(', ') if candidate.attendees else '' }}">
+                </label>
+              </div>
+              <label>
+                説明
+                <textarea name="description">{{ candidate.description or email.subject }}</textarea>
+              </label>
+              <div class="calendar-candidate-actions">
+                <button class="calendar-submit" type="submit">Googleカレンダーに登録</button>
+                <button class="calendar-overwrite" type="submit" formaction="/calendar-candidates/extract" formmethod="post" name="force" value="1">LLM抽出＆上書き</button>
+                <button class="calendar-cancel" type="submit" formaction="/calendar-candidates/clear" formmethod="post">キャンセル</button>
+              </div>
+            </form>
+          {% endfor %}
+        </section>
+      {% endif %}
+    {% endmacro %}
     {% if previous_href %}
       <a class="edge-nav left" href="{{ previous_href }}" aria-label="前の日">◀</a>
     {% else %}
@@ -598,10 +856,13 @@
         </section>
 
         <section class="report-actions" aria-label="レポート操作">
-          <a class="home-link" href="/">本日のメールを読み込む</a>
+          <form class="load-form" method="post" action="/runs">
+            <button class="home-link" type="submit">本日のメールを読み込む</button>
+          </form>
           <a class="home-link" href="/compose">新規メール作成</a>
-          <a class="home-link" href="/singletons">シリーズにない送信メール</a>
+          <a class="home-link" href="/unhandled">未対応メール一覧</a>
           <a class="home-link" href="/rules">優先度ルール</a>
+          <a class="home-link" href="/generation-instructions">LLMへの追加指示</a>
         </section>
 
         <section class="toolbar" aria-label="メール操作">
@@ -613,10 +874,18 @@
         </section>
         <div id="searchStatus" class="search-status"></div>
 
-        <section id="mailList" class="mail-list">
-          {% for email in emails %}
+        <section class="tabs" aria-label="メール一覧タブ">
+          <button type="button" class="tab-button is-active" data-tab="received">受け取ったメール一覧</button>
+          <button type="button" class="tab-button" data-tab="completed">対応済みメール一覧</button>
+          <button type="button" class="tab-button" data-tab="skipped">スキップされたメール</button>
+        </section>
+
+        <section id="receivedPanel" class="tab-panel" data-tab-panel="received">
+          <section class="mail-list">
+          {% for email in active_emails %}
             <article
-              class="mail-card"
+              class="mail-card {{ email.status_class }}"
+              data-status="{{ email.status_class }}"
               data-href="{{ email.message_href }}"
               data-priority="{{ priority_rank[email.analysis.priority] | default(2) }}"
               data-received="{{ email.received_at.timestamp() if email.received_at else 0 }}"
@@ -640,8 +909,74 @@
               {% endif %}
             </article>
           {% endfor %}
+          </section>
+          <div class="empty" data-empty-state hidden>該当するメールがありません。</div>
         </section>
-        <div id="emptyState" class="empty" hidden>該当するメールがありません。</div>
+        <section id="completedPanel" class="tab-panel" data-tab-panel="completed" hidden>
+          <section class="mail-list">
+          {% for email in completed_emails %}
+            <article
+              class="mail-card {{ email.status_class }}"
+              data-status="{{ email.status_class }}"
+              data-href="{{ email.message_href }}"
+              data-priority="{{ priority_rank[email.analysis.priority] | default(2) }}"
+              data-received="{{ email.received_at.timestamp() if email.received_at else 0 }}"
+              data-search="{{ email.search_text|lower }}"
+            >
+              <div class="mail-header">
+                <a class="subject" href="{{ email.message_href }}">{{ email.subject or "(件名なし)" }}</a>
+                <span class="badge priority-{{ email.analysis.priority }}">{{ email.analysis.priority }}</span>
+              </div>
+              <div class="meta">
+                <span>From: {{ email.sender }}</span>
+                <span>To: {{ email.recipients|join(", ") }}</span>
+                <span>受信: {{ email.received_at_display }}</span>
+                <span>読込: {{ email.loaded_at_display }}</span>
+                {% if email.latest_message.completed_at %}<span>対応完了: {{ email.latest_message.completed_at.strftime("%Y-%m-%d %H:%M") }}</span>{% endif %}
+                {% if email.message_count > 1 %}<span>{{ email.message_count }} 件</span>{% endif %}
+                <a href="{{ email.gmail_href }}" target="_blank" rel="noopener">Gmailで開く</a>
+              </div>
+              <div class="snippet">{{ email.snippet[:180] }}{% if email.snippet|length > 180 %}...{% endif %}</div>
+              {% if email.attachment_summary %}
+                <div class="attachment-summary">添付ファイル: {{ email.attachment_summary }}</div>
+              {% endif %}
+            </article>
+          {% endfor %}
+          </section>
+          <div class="empty" data-empty-state hidden>該当するメールがありません。</div>
+        </section>
+        <section id="skippedPanel" class="tab-panel" data-tab-panel="skipped" hidden>
+          <section class="mail-list">
+          {% for email in skipped_emails %}
+            <article
+              class="mail-card {{ email.status_class }}"
+              data-status="{{ email.status_class }}"
+              data-href="{{ email.message_href }}"
+              data-priority="{% if email.filter_action == 'ignore' %}0{% else %}1{% endif %}"
+              data-received="{{ email.received_at.timestamp() if email.received_at else 0 }}"
+              data-search="{{ email.search_text|lower }}"
+            >
+              <div class="mail-header">
+                <a class="subject" href="{{ email.message_href }}">{{ email.subject or "(件名なし)" }}</a>
+                <span class="badge filter-{{ email.filter_label }}">{{ email.filter_label }}</span>
+              </div>
+              <div class="meta">
+                <span>From: {{ email.sender }}</span>
+                <span>To: {{ email.recipients|join(", ") }}</span>
+                <span>受信: {{ email.received_at_display }}</span>
+                <span>読込: {{ email.loaded_at_display }}</span>
+                {% if email.message_count > 1 %}<span>{{ email.message_count }} 件</span>{% endif %}
+                <a href="{{ email.gmail_href }}" target="_blank" rel="noopener">Gmailで開く</a>
+              </div>
+              <div class="snippet">{{ email.snippet[:180] }}{% if email.snippet|length > 180 %}...{% endif %}</div>
+              {% if email.attachment_summary %}
+                <div class="attachment-summary">添付ファイル: {{ email.attachment_summary }}</div>
+              {% endif %}
+            </article>
+          {% endfor %}
+          </section>
+          <div class="empty" data-empty-state hidden>該当するメールがありません。</div>
+        </section>
       {% else %}
         <div class="message-actions">
           <a class="action-link" href="{{ back_href }}">メール一覧に戻る</a>
@@ -652,6 +987,7 @@
             <h1>{{ thread.subject or "(件名なし)" }}</h1>
             <div class="meta">
               <span>{{ thread.message_count }} 件</span>
+              <a class="meta-link" href="{{ thread.gmail_href }}" target="_blank" rel="noopener">Gmailで開く</a>
               <span>From: {{ thread.sender }}</span>
               <span>To: {{ thread.recipients|join(", ") }}</span>
               {% if thread.cc %}<span>Cc: {{ thread.cc|join(", ") }}</span>{% endif %}
@@ -675,6 +1011,16 @@
               <header class="thread-message-header">
                 {% if not email.is_sent %}
                   <div class="message-top-actions">
+                    <label class="resolved-toggle">
+                      <input
+                        type="checkbox"
+                        class="resolved-checkbox"
+                        data-message-id="{{ email.gmail_message_id }}"
+                        data-return-href="/reports/{{ email.report_date }}/index.html"
+                        {% if email.is_resolved %}checked{% endif %}
+                      >
+                      対応済み
+                    </label>
                   <button
                     type="button"
                     class="reply-draft-toggle"
@@ -684,6 +1030,13 @@
                       class="reply-button"
                       href="/replies/new?message_id={{ email.gmail_message_id }}"
                     >返信</a>
+                    {% if not email.calendar_events %}
+                      <form class="calendar-extract-form" method="post" action="/calendar-candidates/extract">
+                        <input type="hidden" name="message_id" value="{{ email.gmail_message_id }}">
+                        <input type="hidden" name="return_url" value="/reports/{{ report_date }}/{{ thread.message_href }}">
+                        <button class="calendar-extract" type="submit">カレンダー候補を抽出</button>
+                      </form>
+                    {% endif %}
                   </div>
                 {% endif %}
                 <h2>{{ email.subject or "(件名なし)" }}</h2>
@@ -693,7 +1046,11 @@
                   {% if email.cc %}<span>Cc: {{ email.cc|join(", ") }}</span>{% endif %}
                   <span>受信: {{ email.received_at_display }}</span>
                   <span>読込: {{ email.loaded_at_display }}</span>
-                  <span class="badge priority-{{ email.analysis.priority }}">{{ email.analysis.priority }}</span>
+                  {% if email.filter_action %}
+                    <span class="badge filter-{{ 'ignore' if email.filter_action == 'ignore' else 'skip' }}">{{ 'ignore' if email.filter_action == 'ignore' else 'skip' }}</span>
+                  {% else %}
+                    <span class="badge priority-{{ email.analysis.priority }}">{{ email.analysis.priority }}</span>
+                  {% endif %}
                 </div>
               </header>
               {% if not email.is_sent %}
@@ -740,6 +1097,7 @@
                     <div class="digest-text">{{ email.digest.summary_ja }}</div>
                   </div>
                 </section>
+                {% if not email.is_sent %}{{ calendar_panel(email, report_date, thread) }}{% endif %}
                 {% if email.digest.translation_ja %}
                   <details class="original-mail">
                     <summary>和訳全文を開く</summary>
@@ -780,6 +1138,7 @@
                   {% endif %}
                 </details>
               {% else %}
+                {{ calendar_panel(email, report_date, thread) }}
                 {% if email.body_html %}
                   <iframe
                     class="message-html"
@@ -802,14 +1161,33 @@
 
     {% if page == "list" %}
       <script>
-        const list = document.querySelector("#mailList");
-        const cards = Array.from(document.querySelectorAll(".mail-card"));
+        const tabButtons = Array.from(document.querySelectorAll(".tab-button"));
+        const panels = Array.from(document.querySelectorAll("[data-tab-panel]"));
         const search = document.querySelector("#mailSearch");
         const sort = document.querySelector("#mailSort");
-        const emptyState = document.querySelector("#emptyState");
         const searchStatus = document.querySelector("#searchStatus");
 
+        window.addEventListener("pageshow", (event) => {
+          if (event.persisted) {
+            window.location.reload();
+          }
+        });
+
+        document.querySelectorAll(".mail-card").forEach((card) => {
+          if (card.dataset.status) {
+            card.classList.add(card.dataset.status);
+          }
+        });
+
+        function activePanel() {
+          return panels.find((panel) => !panel.hidden) || panels[0];
+        }
+
         function render() {
+          const panel = activePanel();
+          const list = panel.querySelector(".mail-list");
+          const emptyState = panel.querySelector("[data-empty-state]");
+          const cards = Array.from(panel.querySelectorAll(".mail-card"));
           const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
           const mode = sort.value;
           const visible = cards.filter((card) => {
@@ -836,19 +1214,62 @@
             : `${cards.length} 件を表示`;
         }
 
+        function activateTab(name) {
+          panels.forEach((panel) => {
+            panel.hidden = panel.dataset.tabPanel !== name;
+          });
+          tabButtons.forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.tab === name);
+          });
+          if (name === "received") {
+            history.replaceState(null, "", window.location.pathname);
+          } else {
+            history.replaceState(null, "", `#${name}`);
+          }
+          render();
+        }
+
+        tabButtons.forEach((button) => {
+          button.addEventListener("click", () => activateTab(button.dataset.tab));
+        });
         search.addEventListener("input", render);
         sort.addEventListener("change", render);
-        cards.forEach((card) => {
+        document.querySelectorAll(".mail-card").forEach((card) => {
           card.addEventListener("click", (event) => {
             if (event.target.closest("a, button")) return;
             window.location.href = card.dataset.href;
           });
         });
+        if (window.location.hash === "#completed") {
+          activateTab("completed");
+        } else if (window.location.hash === "#skipped") {
+          activateTab("skipped");
+        }
         render();
       </script>
     {% endif %}
     {% if page == "message" %}
       <script>
+        fetch("/messages/{{ thread.latest_message.gmail_message_id }}/opened", { method: "POST" }).catch(() => {});
+
+        document.querySelectorAll(".resolved-checkbox").forEach((checkbox) => {
+          checkbox.addEventListener("change", async () => {
+            checkbox.disabled = true;
+            try {
+              await fetch(`/messages/${checkbox.dataset.messageId}/resolved`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ resolved: checkbox.checked }),
+              });
+              window.location.href = checkbox.dataset.returnHref || "../index.html";
+            } catch (error) {
+              checkbox.checked = !checkbox.checked;
+            } finally {
+              checkbox.disabled = false;
+            }
+          });
+        });
+
         const replyButtons = Array.from(document.querySelectorAll(".reply-draft-toggle"));
 
         replyButtons.forEach((button) => {

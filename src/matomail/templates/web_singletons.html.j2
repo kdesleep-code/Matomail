@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>シリーズにない送信メール - Matomail</title>
+    <title>対応済みメール一覧 - Matomail</title>
     <style>
       body { margin: 0; background: #f6f7f9; color: #17202a; font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif; line-height: 1.55; }
       main { width: min(1040px, calc(100vw - 32px)); margin: 32px auto; display: grid; gap: 16px; }
@@ -11,7 +11,8 @@
       h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
       .actions { display: flex; gap: 10px; flex-wrap: wrap; }
       a { color: #176b87; font-weight: 700; }
-      .action { min-height: 38px; display: inline-flex; align-items: center; border: 1px solid #d9dee5; border-radius: 6px; padding: 0 12px; background: white; text-decoration: none; }
+      .action { min-height: 38px; display: inline-flex; align-items: center; border: 1px solid #d9dee5; border-radius: 6px; padding: 0 12px; background: white; text-decoration: none; color: #176b87; font: inherit; font-weight: 700; cursor: pointer; }
+      .load-form { margin: 0; display: inline-flex; }
       .list { display: grid; gap: 10px; }
       .subject { font-size: 17px; }
       .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: #64707d; font-size: 14px; margin-top: 6px; }
@@ -21,10 +22,13 @@
   <body>
     <main>
       <section class="panel">
-        <h1>シリーズにない送信メール</h1>
+        <h1>対応済みメール一覧</h1>
         <div class="actions">
-          <a class="action" href="/">本日のメールを読み込む</a>
+          <form class="load-form" method="post" action="/runs">
+            <button class="action" type="submit">本日のメールを読み込む</button>
+          </form>
           <a class="action" href="/compose">新規メール作成</a>
+          <a class="action" href="/reports/index.html">メール一覧に戻る</a>
         </div>
       </section>
       <section class="list">
@@ -34,12 +38,13 @@
             <div class="meta">
               <span>From: {{ message.sender }}</span>
               <span>To: {{ message.recipients|join(", ") }}</span>
-              <span>送信: {{ message.received_at }}</span>
+              <span>日時: {{ message.received_at }}</span>
+              {% if "SENT" in message.label_ids %}<span>最後のメール: 送信メール</span>{% else %}<span>解決済み</span>{% endif %}
             </div>
             <div class="snippet">{{ message.snippet or message.body[:240] }}</div>
           </article>
         {% else %}
-          <article class="mail">該当するメールはありません。</article>
+          <article class="mail">対応済みメールはありません。</article>
         {% endfor %}
       </section>
     </main>

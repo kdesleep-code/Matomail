@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLMへの追加指示 - Matomail</title>
+    <style>
+      body { margin: 0; background: #f6f7f9; color: #17202a; font-family: "Segoe UI", "Yu Gothic", Meiryo, sans-serif; }
+      main { width: min(900px, calc(100vw - 32px)); margin: 32px auto; display: grid; gap: 16px; }
+      .panel, .card { border: 1px solid #d9dee5; border-radius: 8px; background: white; padding: 20px; }
+      h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+      h2 { margin: 0 0 10px; font-size: 18px; letter-spacing: 0; }
+      .cards { display: grid; gap: 12px; }
+      .instruction { white-space: pre-wrap; min-height: 72px; color: #17202a; border: 1px solid #e2e7ee; border-radius: 6px; padding: 12px; background: #fbfcfd; }
+      .empty { color: #64707d; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+      a { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; padding: 0 14px; border: 1px solid #d9dee5; color: #176b87; background: white; font: inherit; font-weight: 700; text-decoration: none; }
+      .primary { background: #176b87; border-color: #176b87; color: white; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>LLMへの追加指示</h1>
+        <div class="actions">
+          <a href="/">Matomailに戻る</a>
+        </div>
+      </section>
+      <section class="cards">
+        {% for item in items %}
+          <article class="card">
+            <h2>{{ item.label }}</h2>
+            {% if item.instruction %}
+              <div class="instruction">{{ item.instruction }}</div>
+            {% else %}
+              <div class="instruction empty">追加指示は未設定です。</div>
+            {% endif %}
+            <div class="actions">
+              <a class="primary" href="{{ item.edit_url }}">編集</a>
+            </div>
+          </article>
+        {% endfor %}
+      </section>
+    </main>
+  </body>
+</html>

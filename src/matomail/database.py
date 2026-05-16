@@ -136,6 +136,10 @@ class ProcessingStateRecord(MailBase):
     reply_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     calendar_registered: Mapped[bool] = mapped_column(Boolean, default=False)
     attachment_opened: Mapped[bool] = mapped_column(Boolean, default=False)
+    web_opened: Mapped[bool] = mapped_column(Boolean, default=False)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    calendar_candidates_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     report_path: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -168,6 +172,26 @@ class FilterDecisionRecord(MailBase):
     reason: Mapped[str] = mapped_column(Text, default="")
     rule_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
     decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class CalendarEventRecord(MailBase):
+    __tablename__ = "calendar_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email_id: Mapped[int] = mapped_column(ForeignKey("emails.id"), index=True)
+    gmail_message_id: Mapped[str] = mapped_column(String, index=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    timezone: Mapped[str] = mapped_column(String, default="")
+    location: Mapped[str] = mapped_column(Text, default="")
+    attendees_json: Mapped[str] = mapped_column(Text, default="[]")
+    calendar_event_id: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String, default="registered", index=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
     )
@@ -289,6 +313,33 @@ class Database:
             with self.engine.begin() as connection:
                 connection.execute(
                     text("ALTER TABLE emails ADD COLUMN sender_candidates TEXT DEFAULT '[]'")
+                )
+        state_columns = {
+            column["name"]
+            for column in inspect(self.engine).get_columns("processing_state")
+        }
+        if "web_opened" not in state_columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE processing_state ADD COLUMN web_opened BOOLEAN DEFAULT 0")
+                )
+        if "resolved" not in state_columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE processing_state ADD COLUMN resolved BOOLEAN DEFAULT 0")
+                )
+        if "resolved_at" not in state_columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE processing_state ADD COLUMN resolved_at DATETIME")
+                )
+        if "calendar_candidates_hidden" not in state_columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE processing_state "
+                        "ADD COLUMN calendar_candidates_hidden BOOLEAN DEFAULT 0"
+                    )
                 )
 
     def rotate_if_needed(self, max_size_bytes: int | None) -> Path | None:
@@ -493,6 +544,10 @@ class Database:
                         FilterDecisionRecord.action
                         == FILTER_ACTION_ALWAYS_PROCESS
                     )
+                    | (
+                        FilterDecisionRecord.action
+                        == FILTER_ACTION_PRECLASSIFY
+                    )
                 )
                 .order_by(EmailRecord.received_at.desc(), EmailRecord.id.desc())
             ).all()
@@ -502,6 +557,28 @@ class Database:
                 if not _email_record_is_sent(record)
             ]
             return messages[:limit]
+
+    def get_saved_filter_decision(self, gmail_message_id: str) -> dict | None:
+        with self.session_factory() as session:
+            record = session.scalar(
+                select(FilterDecisionRecord)
+                .where(FilterDecisionRecord.gmail_message_id == gmail_message_id)
+                .order_by(FilterDecisionRecord.decided_at.desc(), FilterDecisionRecord.id.desc())
+                .limit(1)
+            )
+            if record is None:
+                return None
+            try:
+                snapshot = json.loads(record.rule_snapshot_json or "{}")
+            except json.JSONDecodeError:
+                snapshot = {}
+            return {
+                "action": record.action,
+                "matched_rule_id": record.matched_rule_id,
+                "matched_rule_name": record.matched_rule_name,
+                "reason": record.reason,
+                "rule_snapshot": snapshot,
+            }
 
     def list_emails_needing_digest(
         self,
@@ -647,6 +724,157 @@ class Database:
             state.updated_at = datetime.now(UTC)
             session.commit()
 
+    def mark_web_opened(self, gmail_message_id: str) -> None:
+        with self.session_factory() as session:
+            state = self._ensure_processing_state(session, gmail_message_id)
+            state.web_opened = True
+            state.updated_at = datetime.now(UTC)
+            session.commit()
+
+    def set_resolved(self, gmail_message_id: str, resolved: bool) -> None:
+        with self.session_factory() as session:
+            state = self._ensure_processing_state(session, gmail_message_id)
+            state.resolved = resolved
+            now = datetime.now(UTC)
+            state.resolved_at = now if resolved else None
+            state.updated_at = now
+            session.commit()
+
+    def save_calendar_event(
+        self,
+        gmail_message_id: str,
+        *,
+        title: str,
+        start_time: datetime | None,
+        end_time: datetime | None,
+        timezone: str,
+        location: str,
+        attendees: Iterable[str],
+        calendar_event_id: str,
+        status: str = "registered",
+    ) -> CalendarEventRecord:
+        with self.session_factory() as session:
+            email_record = self._get_email_record(session, gmail_message_id)
+            if email_record is None:
+                raise ValueError(f"email is not saved: {gmail_message_id}")
+            record = CalendarEventRecord(
+                email_id=email_record.id,
+                gmail_message_id=gmail_message_id,
+                title=title,
+                start_time=start_time,
+                end_time=end_time,
+                timezone=timezone,
+                location=location,
+                attendees_json=json.dumps(list(attendees), ensure_ascii=False),
+                calendar_event_id=calendar_event_id,
+                status=status,
+            )
+            session.add(record)
+            state = self._ensure_processing_state(session, gmail_message_id)
+            state.calendar_registered = status == "registered"
+            state.updated_at = datetime.now(UTC)
+            session.commit()
+            return record
+
+    def get_calendar_event(self, event_record_id: int) -> CalendarEventRecord | None:
+        with self.session_factory() as session:
+            return session.get(CalendarEventRecord, event_record_id)
+
+    def mark_calendar_event_cancelled(self, event_record_id: int) -> str:
+        with self.session_factory() as session:
+            record = session.get(CalendarEventRecord, event_record_id)
+            if record is None:
+                return ""
+            gmail_message_id = record.gmail_message_id
+            record.status = "cancelled"
+            state = self._ensure_processing_state(session, gmail_message_id)
+            still_registered = session.scalar(
+                select(CalendarEventRecord.id)
+                .where(CalendarEventRecord.gmail_message_id == gmail_message_id)
+                .where(CalendarEventRecord.status == "registered")
+                .where(CalendarEventRecord.id != event_record_id)
+                .limit(1)
+            )
+            state.calendar_registered = still_registered is not None
+            state.updated_at = datetime.now(UTC)
+            session.commit()
+            return gmail_message_id
+
+    def set_meeting_candidates(
+        self,
+        gmail_message_id: str,
+        meeting_candidates: list[dict],
+        *,
+        hidden: bool = False,
+    ) -> None:
+        with self.session_factory() as session:
+            email_record = self._get_email_record(session, gmail_message_id)
+            if email_record is None:
+                raise ValueError(f"email is not saved: {gmail_message_id}")
+            analysis = session.scalar(
+                select(EmailAnalysisRecord)
+                .where(EmailAnalysisRecord.email_id == email_record.id)
+                .order_by(
+                    EmailAnalysisRecord.created_at.desc(),
+                    EmailAnalysisRecord.id.desc(),
+                )
+                .limit(1)
+            )
+            if analysis is None:
+                analysis = EmailAnalysisRecord(
+                    email_id=email_record.id,
+                    summary_ja="",
+                    category="",
+                    priority="medium",
+                    requires_reply=False,
+                    suggested_action_ja="",
+                    deadline_candidates_json="[]",
+                    meeting_candidates_json="[]",
+                    reply_draft="",
+                    confidence=0.0,
+                    llm_model="",
+                )
+                session.add(analysis)
+            analysis.meeting_candidates_json = json.dumps(
+                meeting_candidates,
+                ensure_ascii=False,
+            )
+            state = self._ensure_processing_state(session, gmail_message_id)
+            state.calendar_candidates_hidden = hidden
+            state.updated_at = datetime.now(UTC)
+            session.commit()
+
+    def get_meeting_candidates(self, gmail_message_id: str) -> list[dict]:
+        with self.session_factory() as session:
+            email_record = self._get_email_record(session, gmail_message_id)
+            if email_record is None:
+                return []
+            analysis = session.scalar(
+                select(EmailAnalysisRecord)
+                .where(EmailAnalysisRecord.email_id == email_record.id)
+                .order_by(
+                    EmailAnalysisRecord.created_at.desc(),
+                    EmailAnalysisRecord.id.desc(),
+                )
+                .limit(1)
+            )
+            if analysis is None:
+                return []
+            return json.loads(analysis.meeting_candidates_json or "[]")
+
+    def set_calendar_candidates_hidden(
+        self,
+        gmail_message_id: str,
+        hidden: bool,
+    ) -> None:
+        with self.session_factory() as session:
+            if self._get_email_record(session, gmail_message_id) is None:
+                raise ValueError(f"email is not saved: {gmail_message_id}")
+            state = self._ensure_processing_state(session, gmail_message_id)
+            state.calendar_candidates_hidden = hidden
+            state.updated_at = datetime.now(UTC)
+            session.commit()
+
     def save_account_email(self, email_address: str) -> None:
         normalized = _normalize_email_address(email_address)
         if not normalized:
@@ -670,6 +898,23 @@ class Database:
             if record is None or not record.value:
                 return ()
             return tuple(json.loads(record.value))
+
+    def get_app_setting(self, key: str, default: str = "") -> str:
+        with self.session_factory() as session:
+            record = session.get(AppSettingRecord, key)
+            if record is None:
+                return default
+            return record.value
+
+    def set_app_setting(self, key: str, value: str) -> None:
+        with self.session_factory() as session:
+            record = session.get(AppSettingRecord, key)
+            if record is None:
+                record = AppSettingRecord(key=key)
+                session.add(record)
+            record.value = value
+            record.updated_at = datetime.now(UTC)
+            session.commit()
 
     def count_emails(self) -> int:
         with self.session_factory() as session:

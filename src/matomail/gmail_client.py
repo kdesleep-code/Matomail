@@ -23,6 +23,13 @@ from .models import AttachmentInfo, EmailMessage
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+GOOGLE_APP_SCOPES = [
+    GMAIL_READONLY_SCOPE,
+    GMAIL_MODIFY_SCOPE,
+    GMAIL_SEND_SCOPE,
+    GOOGLE_CALENDAR_EVENTS_SCOPE,
+]
 
 
 class GmailClient:
@@ -276,7 +283,8 @@ def load_or_create_credentials(
     force_consent: bool = False,
 ) -> Credentials:
     credentials: Credentials | None = None
-    force_consent = force_consent or _should_force_consent(token_file, scopes)
+    requested_scopes = _dedupe_scopes(scopes)
+    force_consent = force_consent or _should_force_consent(token_file, requested_scopes)
     if token_file.exists() and not force_consent:
         try:
             credentials = Credentials.from_authorized_user_file(str(token_file))
@@ -284,11 +292,11 @@ def load_or_create_credentials(
             credentials = None
             force_consent = True
 
-    if credentials and not _token_has_scopes(token_file, scopes):
+    if credentials and not _token_has_scopes(token_file, requested_scopes):
         credentials = None
         force_consent = True
 
-    if credentials and not credentials.has_scopes(scopes):
+    if credentials and not credentials.has_scopes(requested_scopes):
         credentials = None
         force_consent = True
 
@@ -308,7 +316,11 @@ def load_or_create_credentials(
             raise FileNotFoundError(
                 f"Google OAuth client secrets file was not found: {client_secrets_file}"
             )
-        flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets_file), scopes)
+        flow_scopes = _consent_scopes(token_file, requested_scopes)
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(client_secrets_file),
+            flow_scopes,
+        )
         credentials = flow.run_local_server(
             port=port,
             prompt="consent" if force_consent else None,
@@ -320,26 +332,44 @@ def load_or_create_credentials(
 
 
 def _should_force_consent(token_file: Path, scopes: list[str]) -> bool:
-    if GMAIL_SEND_SCOPE not in set(scopes):
-        return False
     if not token_file.exists():
         return True
     return not _token_has_scopes(token_file, scopes)
 
 
 def _token_has_scopes(token_file: Path, scopes: list[str]) -> bool:
+    return set(scopes).issubset(_token_scopes(token_file))
+
+
+def _token_scopes(token_file: Path) -> set[str]:
     try:
         payload = json.loads(token_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
+        return set()
     raw_scopes = payload.get("scopes") or payload.get("scope") or []
     if isinstance(raw_scopes, str):
-        granted_scopes = set(raw_scopes.split())
+        return set(raw_scopes.split())
     elif isinstance(raw_scopes, list):
-        granted_scopes = {str(scope) for scope in raw_scopes}
-    else:
-        granted_scopes = set()
-    return set(scopes).issubset(granted_scopes)
+        return {str(scope) for scope in raw_scopes}
+    return set()
+
+
+def _consent_scopes(token_file: Path, requested_scopes: list[str]) -> list[str]:
+    return _dedupe_scopes(
+        [
+            *GOOGLE_APP_SCOPES,
+            *_token_scopes(token_file),
+            *requested_scopes,
+        ]
+    )
+
+
+def _dedupe_scopes(scopes: list[str] | set[str]) -> list[str]:
+    deduped: list[str] = []
+    for scope in scopes:
+        if scope and scope not in deduped:
+            deduped.append(scope)
+    return deduped
 
 
 def _reply_subject(subject: str) -> str:

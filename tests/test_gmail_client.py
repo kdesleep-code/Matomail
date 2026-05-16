@@ -396,7 +396,9 @@ def test_load_credentials_reauths_when_existing_token_lacks_requested_scope(
 
     assert isinstance(credentials, _NewCredentials)
     assert calls.read_scopes is None
-    assert calls.flow_scopes == requested_scopes
+    assert set(requested_scopes).issubset(calls.flow_scopes)
+    assert gmail_client.GMAIL_MODIFY_SCOPE in calls.flow_scopes
+    assert gmail_client.GOOGLE_CALENDAR_EVENTS_SCOPE in calls.flow_scopes
     assert calls.prompt == "consent"
 
 
@@ -455,7 +457,9 @@ def test_load_credentials_reauths_when_token_format_is_invalid(
     )
 
     assert isinstance(credentials, _NewCredentials)
-    assert calls.flow_scopes == requested_scopes
+    assert set(requested_scopes).issubset(calls.flow_scopes)
+    assert gmail_client.GMAIL_SEND_SCOPE in calls.flow_scopes
+    assert gmail_client.GOOGLE_CALENDAR_EVENTS_SCOPE in calls.flow_scopes
     assert calls.prompt == "consent"
 
 

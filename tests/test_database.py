@@ -66,6 +66,18 @@ def test_create_all_creates_rules_tables_in_separate_database(tmp_path) -> None:
     assert "emails" not in table_names
 
 
+def test_app_settings_can_be_saved_and_loaded(tmp_path) -> None:
+    database = Database(tmp_path / "matomail.sqlite3")
+    database.create_all()
+
+    assert database.get_app_setting("llm_instruction.reply") == ""
+    assert database.get_app_setting("missing", "fallback") == "fallback"
+
+    database.set_app_setting("llm_instruction.reply", "Use polite Japanese.")
+
+    assert database.get_app_setting("llm_instruction.reply") == "Use polite Japanese."
+
+
 def test_save_email_upserts_by_gmail_message_id(tmp_path) -> None:
     database = Database(tmp_path / "matomail.sqlite3")
     database.create_all()

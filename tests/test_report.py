@@ -1,8 +1,9 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from matomail.database import Database, EmailRecord
+from matomail.database import Database, EmailRecord, ProcessingStateRecord
 from matomail.models import AttachmentInfo, EmailMessage
 from matomail.report import ReportGenerator
 
@@ -325,6 +326,66 @@ def test_report_generator_groups_thread_messages_into_one_card_and_detail_page(t
         tmp_path / "reports" / "2026-05-15" / "messages" / "gmail-thread-1.html"
     ).read_text(encoding="utf-8")
     assert message_html.index("Newer body.") < message_html.index("Older body.")
+
+
+def test_report_generator_marks_read_threads_and_excludes_completed_threads(tmp_path) -> None:
+    database = Database(tmp_path / "matomail.sqlite3")
+    database.create_all()
+    unread = _message("unread", "Unread mail", datetime(2026, 5, 15, 10, 0, tzinfo=UTC))
+    read = _message("read", "Read mail", datetime(2026, 5, 15, 11, 0, tzinfo=UTC))
+    resolved = _message("resolved", "Resolved mail", datetime(2026, 5, 15, 12, 0, tzinfo=UTC))
+    sent_latest_received = _message(
+        "sent-thread-received",
+        "Sent latest thread",
+        datetime(2026, 5, 15, 13, 0, tzinfo=UTC),
+        thread_id="sent-latest-thread",
+    )
+    sent_latest = _message(
+        "sent-thread-sent",
+        "Re: Sent latest thread",
+        datetime(2026, 5, 15, 13, 5, tzinfo=UTC),
+        thread_id="sent-latest-thread",
+        sender="Reader <reader@example.com>",
+    )
+    sent_latest = replace(sent_latest, label_ids=("SENT",))
+    for message in [unread, read, resolved, sent_latest_received, sent_latest]:
+        database.save_email(message)
+        database.save_analysis(message.gmail_message_id, _analysis("medium"), llm_model="test")
+    with database.session_factory() as session:
+        for record in session.scalars(select(EmailRecord)).all():
+            record.created_at = datetime(2026, 5, 15, 9, 0, tzinfo=UTC)
+        session.commit()
+    database.mark_web_opened("read")
+    database.set_resolved("resolved", True)
+    with database.session_factory() as session:
+        state = session.scalar(
+            select(ProcessingStateRecord).where(
+                ProcessingStateRecord.gmail_message_id == "resolved"
+            )
+        )
+        assert state is not None
+        state.resolved_at = datetime(2026, 5, 15, 9, 30, tzinfo=UTC)
+        session.commit()
+
+    ReportGenerator(
+        database=database,
+        report_dir=tmp_path / "reports",
+        timezone="Asia/Tokyo",
+    ).generate_all(open_browser=False)
+
+    html = (tmp_path / "reports" / "2026-05-15" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Unread mail" in html
+    assert "Read mail" in html
+    received_html = html.split('id="completedPanel"', maxsplit=1)[0]
+    completed_html = html.split('id="completedPanel"', maxsplit=1)[1]
+    assert "Resolved mail" not in received_html
+    assert "Sent latest thread" not in received_html
+    assert "Resolved mail" in completed_html
+    assert "Sent latest thread" in completed_html
+    assert 'data-status="is-read"' in html
+    assert 'data-status="is-unread"' in html
 
 
 def test_message_detail_edge_nav_uses_priority_list_neighbors(tmp_path) -> None:
